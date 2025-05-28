@@ -7,7 +7,7 @@ import cv2
 import csv
 import numpy as np
 import open3d as o3d
-from camera_parameters import load_camera_parameters, load_feature_matches
+from camera_parameters_estimation import load_camera_parameters, load_feature_matches
 
 
 def load_intrinsic_parameters(filename):
@@ -154,28 +154,3 @@ def export_mesh(mesh, filename):  # [AJOUT]
         print(f"Mesh exported successfully to {filename}")
     else:
         print("Failed to export mesh.")
-
-
-def main():
-    camera_params_file = 'camera_parameters.csv'
-    intrinsic_params_file = 'intrinsic_parameters.csv'
-    feature_matches_file = 'feature_matches.csv'
-
-    camera_params = load_camera_parameters(camera_params_file)
-    intrinsic_matrices, dist_coeffs = load_intrinsic_parameters(intrinsic_params_file)
-    matches, _ = load_feature_matches(feature_matches_file)
-
-    points = triangulate_points(matches, camera_params, intrinsic_matrices, dist_coeffs)
-    points = points.astype(np.float64) 
-    point_cloud = create_point_cloud(points)
-
-    visualize_point_cloud(point_cloud)
-
-    # Reconstruction du maillage et exportation [AJOUT]
-    mesh = reconstruct_mesh(point_cloud)
-    o3d.visualization.draw_geometries([mesh], window_name='3D Viewer', width=800, height=600, point_show_normal=False)
-    export_mesh(mesh, "reconstructed_mesh.obj")
-
-
-if __name__ == '__main__':
-    main()

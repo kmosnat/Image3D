@@ -25,7 +25,7 @@ def preprocess_image(image):
     gray_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2GRAY)
 
     # Optionally apply histogram equalization
-    # gray_image = cv2.equalizeHist(gray_image)
+    gray_image = cv2.equalizeHist(gray_image)
 
     return gray_image
 
@@ -47,8 +47,3 @@ def process_images_in_folder(folder_path, output_folder=None):
                 output_path = os.path.join(output_folder, filename)
                 cv2.imwrite(output_path, processed_image)
                 print(f"Saved processed image to {output_path}")
-
-            # To view the images
-            cv2.imshow("Processed Image", processed_image)
-            cv2.waitKey(0)
-            cv2.destroyAllWindows()

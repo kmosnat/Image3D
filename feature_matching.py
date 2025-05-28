@@ -10,12 +10,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # Initialize SIFT with custom parameters
-nfeatures = 30000  # Increase for more features
-contrastThreshold = 0.09  # Decrease to retain more features with lower contrast
-edgeThreshold = 6  # Decrease to retain more features that are edge-like
-sigma = 1.6  # Typically left at default
+nfeatures = 20000  # Increase for more features
+contrastThreshold = 0.04  # Decrease to retain more features with lower contrast
+edgeThreshold = 150  # Decrease to retain more features that are edge-like
+sigma = 1.9  # Typically left at default
 
-sift = cv2.SIFT_create(nfeatures=nfeatures, contrastThreshold=contrastThreshold,
+sift = cv2.SIFT_create(nfeatures=nfeatures, nOctaveLayers = 6, contrastThreshold=contrastThreshold,
                        edgeThreshold=edgeThreshold, sigma=sigma)
 
 
@@ -73,8 +73,7 @@ def detect_and_match_features(image1, image2, sift, pair_name, save_path):
     # Store all good matches as per Lowe's ratio test.
     good_matches = []
     for m, n in matches:
-        if m.distance < 0.85 * n.distance:
-            good_matches.append(m)
+        good_matches.append(m)
 
     print(f"{len(good_matches)} matches passed Lowe's ratio test.")
 
@@ -86,7 +85,7 @@ def detect_and_match_features(image1, image2, sift, pair_name, save_path):
             [keypoints2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
 
         matrix, mask = cv2.findHomography(
-            ptsA, ptsB, cv2.RANSAC, 4.0, maxIters=2000)
+            ptsA, ptsB, cv2.RANSAC, 200.0, maxIters=2000)
         if mask is not None:
             matchesMask = mask.ravel().tolist()
             good_matches = [gm for gm, mask in zip(
@@ -101,7 +100,7 @@ def detect_and_match_features(image1, image2, sift, pair_name, save_path):
 
     # Draw top matches
     img_matches = cv2.drawMatches(image1, keypoints1, image2, keypoints2,
-                                  good_matches[:50], None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+                                  good_matches[:30000], None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
 
     # Adding title to the image
     draw_title(img_matches, 'Feature Matches')
@@ -131,46 +130,3 @@ def load_images_from_folder(folder):
         if img is not None:
             images.append((filename, img))
     return images
-
-
-def main():
-    # Main function to process images for feature detection and matching.
-    # It loads images from a folder, performs feature matching, and saves the results.
-    folder_path = 'preprocessed_images/og/'
-    save_path = 'output/feature_matching/og/'
-    images = load_images_from_folder(folder_path)
-
-    all_matches = []  # Initialize the list to store all matches
-
-    # Perform feature matching between all pairs of images
-    for i in range(len(images)):
-        for j in range(i + 1, len(images)):
-            image1_name, image1 = images[i]
-            image2_name, image2 = images[j]
-
-            # Generate a unique name for each pair of images
-            pair_name = f"{image1_name}_vs_{image2_name}"
-
-            h1, w1 = image1.shape[:2]  # Height and width of image1
-            h2, w2 = image2.shape[:2]  # Height and width of image2
-
-            matches, keypoints1, keypoints2 = detect_and_match_features(
-                image1, image2, sift, pair_name, save_path)
-
-            # Process matches and store them in all_matches
-            for match in matches:
-                pt1 = keypoints1[match.queryIdx].pt
-                pt2 = keypoints2[match.trainIdx].pt
-                all_matches.append(
-                    [image1_name, image2_name, pt1[0], pt1[1], pt2[0], pt2[1], w1, h1, w2, h2])
-
-    # Write all matches and dimensions to CSV at once
-    with open('feature_matches.csv', 'w', newline='') as matches_file:
-        csv_writer = csv.writer(matches_file)
-        csv_writer.writerow(['Image1', 'Image2', 'KeyPoint1_X', 'KeyPoint1_Y',
-                            'KeyPoint2_X', 'KeyPoint2_Y', 'Width1', 'Height1', 'Width2', 'Height2'])
-        csv_writer.writerows(all_matches)
-
-
-if __name__ == '__main__':
-    main()

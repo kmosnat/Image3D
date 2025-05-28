@@ -75,6 +75,29 @@ def estimate_intrinsic_parameters(matches, dimensions):
 
     return camera_matrices, dist_coeffs
 
+def load_camera_parameters(filename):
+    # Loads camera parameters from a specified CSV file.
+    # The parameters include rotation vectors and translation vectors for each image.
+    # Converts the rotation vectors to rotation matrices.
+    # Returns a dictionary mapping each image to its corresponding camera parameters.
+    camera_params = {}
+    with open(filename, 'r') as file:
+        reader = csv.reader(file)
+        next(reader)  # Skip the header
+        for row in reader:
+            if len(row) != 7:
+                print(f"Skipping invalid row: {row}")
+                continue
+            image, rvec1, rvec2, rvec3, tvec1, tvec2, tvec3 = row
+            rvec = np.array([float(rvec1), float(rvec2), float(rvec3)])
+            tvec = np.array([float(tvec1), float(tvec2), float(tvec3)])
+
+            # Convert rotation vector to rotation matrix
+            r_mat, _ = cv2.Rodrigues(rvec)
+
+            camera_params[image] = {'r_mat': r_mat, 'tvec': tvec}
+    return camera_params
+
 
 def load_feature_matches(csv_file):
     # Loads feature matches and image dimensions from a CSV file.
@@ -188,30 +211,3 @@ def save_intrinsic_params_to_file(intrinsic_matrices, dist_coeffs, filename):
             writer.writerow(
                 [image, intrinsic.flatten().tolist(), dist.flatten().tolist()])
 
-
-def main():
-    # Main function to process the estimation of camera parameters.
-    # It loads feature matches, estimates camera and intrinsic parameters, and saves them to files.
-
-    csv_file = 'feature_matches.csv'
-    matches, dimensions = load_feature_matches(csv_file)
-
-    # Estimate camera parameters
-    camera_params = estimate_camera_parameters(matches, dimensions)
-
-    # Estimate intrinsic parameters
-    intrinsic_matrices, dist_coeffs = estimate_intrinsic_parameters(
-        matches, dimensions)
-
-    # Save camera parameters to a file
-    camera_params_file = 'camera_parameters.csv'
-    save_camera_params_to_file(camera_params, camera_params_file)
-
-    # Save the intrinsic parameters and distortion coefficients
-    intrinsic_params_file = 'intrinsic_parameters.csv'
-    save_intrinsic_params_to_file(
-        intrinsic_matrices, dist_coeffs, intrinsic_params_file)
-
-
-if __name__ == '__main__':
-    main()
