@@ -12,8 +12,8 @@ import numpy as np
 # Initialize SIFT with custom parameters
 nfeatures = 20000  # Increase for more features
 contrastThreshold = 0.04  # Decrease to retain more features with lower contrast
-edgeThreshold = 150  # Decrease to retain more features that are edge-like
-sigma = 1.9  # Typically left at default
+edgeThreshold = 200  # Decrease to retain more features that are edge-like
+sigma = 1.2  # Typically left at default
 
 sift = cv2.SIFT_create(nfeatures=nfeatures, nOctaveLayers = 6, contrastThreshold=contrastThreshold,
                        edgeThreshold=edgeThreshold, sigma=sigma)

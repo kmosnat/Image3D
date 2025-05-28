@@ -128,21 +128,65 @@ def create_point_cloud(points):
     return point_cloud
 
 
-def reconstruct_mesh(point_cloud):  
-    point_cloud, ind = point_cloud.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
-    point_cloud = point_cloud.select_by_index(ind)
+def reconstruct_mesh(
+    point_cloud: o3d.geometry.PointCloud,
+    *,
+    nb_neighbors: int = 20,
+    std_ratio: float = 2.0,
+    voxel_size: float | None = None,
+    normal_radius: float = 0.1,
+    normal_max_nn: int = 30,
+    poisson_depth: int = 10,
+    poisson_scale: float = 1.1,
+    poisson_linear_fit: bool = False,
+    density_prune_ratio: float | None = 0.01,
+    target_triangle_count: int | None = None,
+    laplacian_iterations: int = 5,
+):
+    
+    pc = point_cloud
 
-    # Estimation des normales
-    print("Estimating normals...")
-    point_cloud.estimate_normals(
-        search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30)
+    # 1. Voxel down-sampling pour uniformiser la densité et accélérer la suite
+    if voxel_size:
+        pc = pc.voxel_down_sample(voxel_size)
+
+    # 2. Filtrage statistique des outliers
+    pc, ind = pc.remove_statistical_outlier(nb_neighbors=nb_neighbors, std_ratio=std_ratio)
+    pc = pc.select_by_index(ind)
+
+    # 3. Estimation & orientation cohérente des normales
+    pc.estimate_normals(
+        search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=normal_radius, max_nn=normal_max_nn)
     )
+    pc.orient_normals_consistent_tangent_plane(50)
 
-    # Reconstruction du maillage avec Poisson
-    print("Reconstructing mesh using Poisson surface reconstruction...")
+    # 4. Reconstruction Poisson
     mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
-        point_cloud, depth=9
+        pc,
+        depth=poisson_depth,
+        scale=poisson_scale,
+        linear_fit=poisson_linear_fit,
     )
+
+    # 5. Suppression des triangles de faible densité
+    if density_prune_ratio is not None:
+        dens = np.asarray(densities)
+        thresh = np.quantile(dens, density_prune_ratio)
+        mesh.remove_vertices_by_mask(dens < thresh)
+
+    # 6. Décimation pour contrôler la taille du maillage
+    if target_triangle_count is not None and target_triangle_count < len(mesh.triangles):
+        mesh = mesh.simplify_quadric_decimation(target_triangle_count)
+
+    # 7. Lissage léger pour réduire les artefacts
+    if laplacian_iterations > 0:
+        mesh = mesh.filter_smooth_laplacian(number_of_iterations=laplacian_iterations)
+
+    # 8. Nettoyage topologique final
+    mesh.remove_degenerate_triangles()
+    mesh.remove_duplicated_triangles()
+    mesh.remove_duplicated_vertices()
+    mesh.remove_non_manifold_edges()
 
     return mesh
 

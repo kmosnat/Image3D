@@ -62,7 +62,7 @@ def main(batch):
     # Visualisation et export
     visualize_point_cloud(point_cloud)
     mesh = reconstruct_mesh(point_cloud)
-    o3d.visualization.draw_geometries([mesh], window_name='3D Viewer', width=800, height=600)
+    o3d.visualization.draw_geometries([mesh], window_name='3D Viewer', width=1920, height=1080)
     export_mesh(mesh, "reconstructed_mesh.obj")
 
 if __name__ == '__main__':
