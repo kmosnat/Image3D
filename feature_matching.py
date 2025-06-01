@@ -10,13 +10,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # Initialize SIFT with custom parameters
-nfeatures = 20000  # Increase for more features
-contrastThreshold = 0.04  # Decrease to retain more features with lower contrast
+nfeatures = 25000  # Increase for more features
+contrastThreshold = 0.02  # Decrease to retain more features with lower contrast
 edgeThreshold = 200  # Decrease to retain more features that are edge-like
-sigma = 1.2  # Typically left at default
+sigma = 1.9  # Typically left at default
 
 sift = cv2.SIFT_create(nfeatures=nfeatures, nOctaveLayers = 6, contrastThreshold=contrastThreshold,
                        edgeThreshold=edgeThreshold, sigma=sigma)
+
+orb = cv2.ORB_create()
 
 
 def draw_title(img, title, font_scale=1, font=cv2.FONT_HERSHEY_SIMPLEX, y_offset=30):
@@ -85,7 +87,7 @@ def detect_and_match_features(image1, image2, sift, pair_name, save_path):
             [keypoints2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
 
         matrix, mask = cv2.findHomography(
-            ptsA, ptsB, cv2.RANSAC, 200.0, maxIters=2000)
+            ptsA, ptsB, cv2.RANSAC, 500.0, maxIters=2000)
         if mask is not None:
             matchesMask = mask.ravel().tolist()
             good_matches = [gm for gm, mask in zip(

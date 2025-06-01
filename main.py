@@ -32,7 +32,7 @@ def save_matches_to_csv(matches, filename):
         writer.writerow(headers)
         writer.writerows(matches)
 
-def main(batch):
+def main(batch, visualize=False):
     images_path = f'images/{batch}/'
     preprocessed_path = f'preprocessed_images/{batch}/'
     matching_output_path = f'output/feature_matching/{batch}/'
@@ -59,14 +59,16 @@ def main(batch):
     points_3d = triangulate_points(matches, cam_params, intrinsics, dist_coeffs).astype(np.float64)
     point_cloud = create_point_cloud(points_3d)
 
-    # Visualisation et export
-    visualize_point_cloud(point_cloud)
-    mesh = reconstruct_mesh(point_cloud)
-    o3d.visualization.draw_geometries([mesh], window_name='3D Viewer', width=1920, height=1080)
-    export_mesh(mesh, "reconstructed_mesh.obj")
+    if visualize:
+        # Visualisation et export
+        visualize_point_cloud(point_cloud)
+        mesh = reconstruct_mesh(point_cloud)
+        export_mesh(mesh, "reconstructed_mesh.obj")
+        o3d.visualization.draw_geometries([mesh], window_name='3D Viewer', width=1920, height=1080)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Pipeline de reconstruction 3D à partir d’images.')
     parser.add_argument('-batch', required=True, help='Nom du dossier contenant les images à traiter')
+    parser.add_argument('-visualize', action='store_true', help='Visualiser les résultats de la reconstruction 3D')
     args = parser.parse_args()
-    main(args.batch)
+    main(args.batch, args.visualize)
