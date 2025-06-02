@@ -1,1 +1,7 @@
 __pycache__
+preprocessed_images/
+output/
+camera_parameters.csv
+feature_matches.csv
+intrinsic_parameters.csv
+reconstructed_mesh.obj
