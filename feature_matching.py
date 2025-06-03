@@ -11,9 +11,9 @@ import numpy as np
 
 # Initialize SIFT with custom parameters
 nfeatures = 25000  # Increase for more features
-contrastThreshold = 0.02  # Decrease to retain more features with lower contrast
-edgeThreshold = 200  # Decrease to retain more features that are edge-like
-sigma = 1.9  # Typically left at default
+contrastThreshold = 0.0001  # Decrease to retain more features with lower contrast
+edgeThreshold = 100  # Decrease to retain more features that are edge-like
+sigma = 1.6  # Typically left at default
 
 sift = cv2.SIFT_create(nfeatures=nfeatures, nOctaveLayers = 6, contrastThreshold=contrastThreshold,
                        edgeThreshold=edgeThreshold, sigma=sigma)
@@ -87,7 +87,7 @@ def detect_and_match_features(image1, image2, sift, pair_name, save_path):
             [keypoints2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
 
         matrix, mask = cv2.findHomography(
-            ptsA, ptsB, cv2.RANSAC, 500.0, maxIters=2000)
+            ptsA, ptsB, cv2.RANSAC, 10.0, maxIters=2000)
         if mask is not None:
             matchesMask = mask.ravel().tolist()
             good_matches = [gm for gm, mask in zip(

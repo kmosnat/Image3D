@@ -10,18 +10,19 @@ from reconstruction_visualization import *
 
 def process_feature_matching(images, save_path):
     all_matches = []
-    for i in range(len(images)):
-        for j in range(i + 1, len(images)):
-            img1_name, img1 = images[i]
-            img2_name, img2 = images[j]
-            pair_name = f"{img1_name}_vs_{img2_name}"
-            h1, w1 = img1.shape[:2]
-            h2, w2 = img2.shape[:2]
+    #for i in range(1, len(images)):
+    for j in range(1, len(images)):
+        i=j-1
+        img1_name, img1 = images[i]
+        img2_name, img2 = images[j]
+        pair_name = f"{img1_name}_vs_{img2_name}"
+        h1, w1 = img1.shape[:2]
+        h2, w2 = img2.shape[:2]
 
-            matches, kp1, kp2 = detect_and_match_features(img1, img2, sift, pair_name, save_path)
-            for m in matches:
-                pt1, pt2 = kp1[m.queryIdx].pt, kp2[m.trainIdx].pt
-                all_matches.append([img1_name, img2_name, pt1[0], pt1[1], pt2[0], pt2[1], w1, h1, w2, h2])
+        matches, kp1, kp2 = detect_and_match_features(img1, img2, sift, pair_name, save_path)
+        for m in matches:
+            pt1, pt2 = kp1[m.queryIdx].pt, kp2[m.trainIdx].pt
+            all_matches.append([img1_name, img2_name, pt1[0], pt1[1], pt2[0], pt2[1], w1, h1, w2, h2])
     return all_matches
 
 def save_matches_to_csv(matches, filename):
@@ -58,6 +59,7 @@ def main(batch, visualize=False):
     # Reconstruction 3D
     points_3d = triangulate_points(matches, cam_params, intrinsics, dist_coeffs).astype(np.float64)
     point_cloud = create_point_cloud(points_3d)
+    save_point_cloud(point_cloud, 'point_cloud.ply')
 
     if visualize:
         # Visualisation et export
