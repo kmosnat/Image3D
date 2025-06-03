@@ -35,6 +35,7 @@ def save_matches_to_csv(matches, filename):
 
 def main(batch, visualize=False):
     images_path = f'images/{batch}/'
+    images_calib = f'images/{batch}/calib'
     preprocessed_path = f'preprocessed_images/{batch}/'
     matching_output_path = f'output/feature_matching/{batch}/'
     
@@ -43,15 +44,22 @@ def main(batch, visualize=False):
     images = load_images_from_folder(preprocessed_path)
 
     # Appariement de caractéristiques
-    matches = process_feature_matching(images, matching_output_path)
+    manual_matching = True
+    if manual_matching:
+        matches = launch_selector(images, matching_output_path)
+    else:
+        matches = process_feature_matching(images, matching_output_path)
     save_matches_to_csv(matches, 'feature_matches.csv')
 
     # Chargement des données
     matches, dimensions = load_feature_matches('feature_matches.csv')
 
     # Estimation des paramètres caméra
-    cam_params = estimate_camera_parameters(matches, dimensions)
-    intrinsics, dist_coeffs = estimate_intrinsic_parameters(matches, dimensions)
+    cam_params = estimate_camera_parameters(matches, dimensions, ransac_filter=not manual_matching)
+    if manual_matching:
+        intrinsics, dist_coeffs = calibrate_camera_with_chessboard(images_calib, (10,7), 2)
+    else:
+        intrinsics, dist_coeffs = estimate_intrinsic_parameters(matches, dimensions)
 
     save_camera_params_to_file(cam_params, 'camera_parameters.csv')
     save_intrinsic_params_to_file(intrinsics, dist_coeffs, 'intrinsic_parameters.csv')
