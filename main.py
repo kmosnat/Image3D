@@ -11,23 +11,19 @@ from reconstruction_visualization import *
 
 def process_feature_matching(images, save_path):
     all_matches = []
-    for i in range(len(images)):
-        for j in range(i + 1, len(images)):
-            img1_name, img1 = images[i]
-            img2_name, img2 = images[j]
-            pair_name = f"{img1_name}_vs_{img2_name}"
-            h1, w1 = img1.shape[:2]
-            h2, w2 = img2.shape[:2]
+    #for i in range(1, len(images)):
+    for j in range(1, len(images)):
+        i=j-1
+        img1_name, img1 = images[i]
+        img2_name, img2 = images[j]
+        pair_name = f"{img1_name}_vs_{img2_name}"
+        h1, w1 = img1.shape[:2]
+        h2, w2 = img2.shape[:2]
 
-            matches, kp1, kp2 = detect_and_match_features(img1, img2, sift, pair_name, save_path)
-            for m in matches:
-                pt1, pt2 = kp1[m.queryIdx].pt, kp2[m.trainIdx].pt
-                all_matches.append([
-                    img1_name, img2_name,
-                    pt1[0], pt1[1],
-                    pt2[0], pt2[1],
-                    w1, h1, w2, h2
-                ])
+        matches, kp1, kp2 = detect_and_match_features(img1, img2, sift, pair_name, save_path)
+        for m in matches:
+            pt1, pt2 = kp1[m.queryIdx].pt, kp2[m.trainIdx].pt
+            all_matches.append([img1_name, img2_name, pt1[0], pt1[1], pt2[0], pt2[1], w1, h1, w2, h2])
     return all_matches
 
 
@@ -77,40 +73,12 @@ def main(batch, visualize=False):
 
     # 6) Enregistrer les paramètres caméra dans un CSV (fonction à adapter le cas échéant)
     save_camera_params_to_file(cam_params, 'camera_parameters.csv')
+    save_intrinsic_params_to_file(intrinsics, dist_coeffs, 'intrinsic_parameters.csv')
 
-    # 7) Reconstruction 3D : trianguler pour chaque paire et agréger tous les points
-    all_points_3d = []
-
-    for (imgA, imgB), match_points in matches_dict.items():
-        if imgA not in cam_params or imgB not in cam_params:
-            print(f"[Warning] Pas de pose pour {imgA} ou {imgB}, skipping triangulation.")
-            continue
-
-        # Extraire R, t, K, D pour chaque image
-        R1 = cam_params[imgA]['r_mat']
-        t1 = cam_params[imgA]['tvec']
-        R2 = cam_params[imgB]['r_mat']
-        t2 = cam_params[imgB]['tvec']
-
-        # Construire le tuple attendu par triangulate_points
-        cam_tuple = (R1, t1, R2, t2)
-
-        # Les correspondances pour cette paire : liste de (x1, y1, x2, y2)
-        try:
-            pts3d = triangulate_points(match_points, cam_tuple, intrinsics, dist_coeffs)
-            all_points_3d.append(pts3d)
-        except ValueError as e:
-            print(f"[Triangulation Error] {e} pour paire {imgA}-{imgB}")
-
-    if len(all_points_3d) == 0:
-        print("[Error] Aucune triangulation n'a produit de points 3D.")
-        return
-
-    # Concaténation de tous les nuages 3D partiels
-    all_points_3d = np.vstack(all_points_3d)
-
-    # 8) Création du nuage de points Open3D et visualisation
-    point_cloud = create_point_cloud(all_points_3d)
+    # Reconstruction 3D
+    points_3d = triangulate_points(matches, cam_params, intrinsics, dist_coeffs).astype(np.float64)
+    point_cloud = create_point_cloud(points_3d)
+    save_point_cloud(point_cloud, 'point_cloud.ply')
 
     if visualize:
         visualize_point_cloud(point_cloud)

@@ -4,10 +4,14 @@
 
 # import statements
 import cv2
+import os
 import csv
 import numpy as np
 import open3d as o3d
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 from camera_parameters_estimation import load_camera_parameters, load_feature_matches
+from scipy.spatial.transform import Rotation as R
 
 
 def load_intrinsic_parameters(filename):
@@ -35,7 +39,11 @@ def triangulate_points(matches, camera_params, intrinsic_matrices, dist_coeffs):
     # This function forms the core of 3D scene reconstruction by converting 2D image points to 3D points.
 
     all_points_3d = []
-
+    # Initialisation des poses globales
+    global_poses = {}
+    # La première image est l'origine
+    global_poses[None] = (np.eye(3), np.zeros((3, 1)))
+    prev_img = None
     for (img1, img2), match_pts in matches.items():
         print(f"Processing pair: {img1} and {img2}")
 
@@ -50,37 +58,59 @@ def triangulate_points(matches, camera_params, intrinsic_matrices, dist_coeffs):
                 f"Intrinsic parameters for {img1} or {img2} are missing. Skipping.")
             continue
 
-        # Get camera matrices (extrinsic parameters: rotation and translation)
-        extrinsic1 = np.hstack(
-            (camera_params[img1]['r_mat'], camera_params[img1]['tvec'].reshape(-1, 1)))
-        extrinsic2 = np.hstack(
-            (camera_params[img2]['r_mat'], camera_params[img2]['tvec'].reshape(-1, 1)))
-
-        # Get intrinsic parameters and distortion coefficients
         intrinsic1 = intrinsic_matrices[img1]
         intrinsic2 = intrinsic_matrices[img2]
         dist1 = dist_coeffs[img1]
         dist2 = dist_coeffs[img2]
 
-        # Extracting matched points and converting them to the correct format
         pts1 = np.float32([pt[0:2] for pt in match_pts])
         pts2 = np.float32([pt[2:4] for pt in match_pts])
 
-        # Undistort points
-        pts1_undistorted = cv2.undistortPoints(
-            np.expand_dims(pts1, axis=1), intrinsic1, dist1)
-        pts2_undistorted = cv2.undistortPoints(
-            np.expand_dims(pts2, axis=1), intrinsic2, dist2)
+        # Correction de la distorsion
+        pts1_undist = pts1 #cv2.undistortPoints(
+            #np.expand_dims(pts1, axis=1), intrinsic1, dist1).squeeze()
+        pts2_undist = pts2 #cv2.undistortPoints(
+            #np.expand_dims(pts2, axis=1), intrinsic2, dist2).squeeze()
 
-        # Triangulate points
-        P1 = intrinsic1 @ extrinsic1
-        P2 = intrinsic2 @ extrinsic2
-        pts_4d_hom = cv2.triangulatePoints(
-            P1, P2, pts1_undistorted, pts2_undistorted)
+        #visualize_distortion_field(img1, pts1, intrinsic1, dist1)
+        #visualize_distortion_field(img2, pts2, intrinsic2, dist2)
+
+        # Triangulate points using relative pose estimated from the image pair
+        E, mask = cv2.findEssentialMat(
+            pts1_undist, pts2_undist, np.eye(3), method=cv2.RANSAC, prob=0.999, threshold=1.0)
+        _, R_rel, t_rel, mask_pose = cv2.recoverPose(E, pts1_undist, pts2_undist, np.eye(3))
+        inliers = mask_pose.ravel() > 0
+        pts1_undist = pts1_undist[inliers]
+        pts2_undist = pts2_undist[inliers]
+
+        # Pose absolue de img1
+        if img1 not in global_poses:
+            if prev_img is None:
+                # Première image : origine
+                global_poses[img1] = (np.eye(3), np.zeros((3, 1)))
+            else:
+                global_poses[img1] = global_poses[prev_img]
+
+        # Pose absolue de img2
+        R1, t1 = global_poses[img1]
+        R2 = R1 @ R_rel
+        t2 = R1 @ t_rel + t1
+        global_poses[img2] = (R2, t2)
+        decompose_pose(R_rel, t_rel, seq='xyz', degrees=True)
+        # Matrices de projection dans le repère de la première image
+        P1 = np.hstack((R1, t1))
+        P2 = np.hstack((R2, t2))
+        pts_4d_hom = cv2.triangulatePoints(P1, P2, pts1_undist.T, pts2_undist.T)
 
         # Convert homogeneous coordinates to 3D points
         pts_3d = pts_4d_hom[:3] / pts_4d_hom[3]
         all_points_3d.append(pts_3d.T)
+        # Visualisation des points 3D de la paire courante
+        plot_3d_points(pts_3d.T, title=f"Nuage 3D pour la paire {img1} - {img2}")
+        #plot_depth_histogram(pts_3d.T)
+        # Visualisation de la projection des points 3D sur l'image d'origine (img1)
+        project_and_show_on_image(img1, pts_3d.T, intrinsic1, R1, t1, pts1_undist)
+        prev_img = img2
 
     # Combine all 3D points from each image pair
     points_3d = np.concatenate(
@@ -90,6 +120,12 @@ def triangulate_points(matches, camera_params, intrinsic_matrices, dist_coeffs):
     valid_points = points_3d[~np.isnan(points_3d).any(
         axis=1) & ~np.isinf(points_3d).any(axis=1)]
     print(f"Total valid 3D points: {len(valid_points)}")
+
+    # Visualisation du nuage de points global et de la trajectoire caméra
+    plot_3d_points(valid_points, title="Nuage de points 3D global")
+    plot_depth_histogram(valid_points)
+    plot_camera_trajectory(global_poses)
+    plot_camera_orientations(global_poses)
 
     return valid_points
 
@@ -127,6 +163,15 @@ def create_point_cloud(points):
         print("No points available to create point cloud.")
     return point_cloud
 
+def save_point_cloud(point_cloud, filename):
+    """
+    Exporte le nuage de points au format .ply (lisible par Blender).
+    """
+    success = o3d.io.write_point_cloud(filename, point_cloud)
+    if success:
+        print(f"Point cloud exported successfully to {filename}")
+    else:
+        print("Failed to export point cloud.")
 
 def reconstruct_mesh(
     point_cloud: o3d.geometry.PointCloud,
@@ -198,3 +243,230 @@ def export_mesh(mesh, filename):  # [AJOUT]
         print(f"Mesh exported successfully to {filename}")
     else:
         print("Failed to export mesh.")
+
+def visualize_distortion_field(image_name, pts, intrinsic, dist):
+    """
+    Affiche le champ de correction de distorsion pour les points donnés sur l'image.
+    - image_name: nom du fichier image (ex: 'pic.0280.jpg' ou 'model_000.png')
+    - pts: np.array de shape (N,2), points d'intérêt (x, y)
+    - intrinsic: matrice intrinsèque
+    - dist: coefficients de distorsion
+    """
+    # Recherche du chemin de l'image dans le dossier images/
+    found = False
+    for root, dirs, files in os.walk('preprocessed_images'):
+        if image_name in files:
+            img_path = os.path.join(root, image_name)
+            found = True
+            break
+    if not found:
+        print(f"[Info] Image {image_name} non trouvée dans preprocessed_images/.")
+        return
+    image = cv2.imread(img_path)
+    if image is None:
+        print(f"[Info] Impossible de lire l'image {img_path}.")
+        return
+    pts = np.float32(pts)
+    pts_undist = cv2.undistortPoints(np.expand_dims(pts, axis=1), intrinsic, dist, P=intrinsic).squeeze()
+    plt.figure(figsize=(10, 10))
+    if image.ndim == 2:
+        plt.imshow(image, cmap='gray')
+    else:
+        plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+    #plt.scatter(pts[:, 0], pts[:, 1], color='red', label='Original')
+    print(len(pts), len(pts_undist))
+    plt.scatter(pts_undist[:, 0], pts_undist[:, 1], color='blue', label='Corrigé')
+    for (x0, y0), (x1, y1) in zip(pts, pts_undist):
+        plt.arrow(x0, y0, x1 - x0, y1 - y0, color='green', head_width=6, length_includes_head=True)
+    plt.legend()
+    plt.title(f'Champ de correction de distorsion: {image_name}')
+    plt.show(block=False)
+    plt.pause(0.001)
+
+def decompose_pose(R_mat, t_vec, seq='xyz', degrees=True):
+    """
+    Décompose une pose (matrice de rotation + translation) en angles d'Euler et translation.
+    - R_mat: matrice de rotation 3x3
+    - t_vec: vecteur de translation 3x1 ou 3,
+    - seq: séquence d'axes pour les angles d'Euler ('xyz', 'zyx', etc.)
+    - degrees: True pour obtenir les angles en degrés
+    Retourne: angles (tuple), translation (tuple)
+    """
+    rot = R.from_matrix(R_mat)
+    angles = rot.as_euler(seq, degrees=degrees)
+    t = t_vec.flatten()
+    print(f"Rotation (x, y, z): {angles}, Translation: {t}")
+    return angles, t
+
+def plot_3d_points(points_3d, title="Nuage de points 3D"):
+    """
+    Affiche un nuage de points 3D avec matplotlib.
+    """
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    ax.scatter(points_3d[:, 0], points_3d[:, 1], points_3d[:, 2], s=1)
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title(title)
+    plt.show(block=False)
+    plt.pause(0.001)
+
+def plot_depth_histogram(points_3d):
+    """
+    Affiche l'histogramme des profondeurs (z) des points 3D.
+    """
+    import matplotlib.pyplot as plt
+    plt.figure()
+    plt.hist(points_3d[:, 2], bins=100)
+    plt.xlabel('Z (profondeur)')
+    plt.ylabel('Nombre de points')
+    plt.title('Distribution des profondeurs')
+    plt.show(block=False)
+    plt.pause(0.001)
+
+def plot_camera_trajectory(global_poses):
+    """
+    Affiche la trajectoire des caméras estimées.
+    """
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    traj = np.array([t.flatten() for R, t in global_poses.values() if t is not None])
+    ax.plot(traj[:, 0], traj[:, 1], traj[:, 2], marker='o')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title('Trajectoire des caméras')
+    plt.show(block=False)
+    plt.pause(0.001)
+
+def plot_camera_orientations(global_poses):
+    """
+    Affiche la trajectoire des caméras estimées avec orientation (axes locaux).
+    """
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    traj = np.array([t.flatten() for R, t in global_poses.values() if t is not None])
+    ax.plot(traj[:, 0], traj[:, 1], traj[:, 2], marker='o', label='Trajectoire')
+    # Affichage des axes locaux pour chaque caméra
+    for R, t in global_poses.values():
+        if t is not None:
+            t = t.flatten()
+            # Les trois axes locaux
+            scale = 0.1  # Ajuste la taille des axes
+            x_axis = R[:, 0] * scale
+            y_axis = R[:, 1] * scale
+            z_axis = R[:, 2] * scale
+            ax.quiver(t[0], t[1], t[2], x_axis[0], x_axis[1], x_axis[2], color='r', length=scale, normalize=True)
+            ax.quiver(t[0], t[1], t[2], y_axis[0], y_axis[1], y_axis[2], color='g', length=scale, normalize=True)
+            ax.quiver(t[0], t[1], t[2], z_axis[0], z_axis[1], z_axis[2], color='b', length=scale, normalize=True)
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title('Trajectoire et orientation des caméras')
+    ax.legend()
+    plt.show(block=False)
+    plt.pause(0.001)
+
+def project_and_show_on_image(image_name, points_3d, intrinsic, R, t, original_2d_points=None):
+    """
+    Projette les points 3D sur l'image d'origine et affiche le résultat.
+    - image_name: nom du fichier image (ex: 'pic.0280.jpg')
+    - points_3d: (N,3) points 3D à projeter
+    - intrinsic: matrice intrinsèque de la caméra
+    - R, t: pose de la caméra (rotation, translation)
+    - original_2d_points: (N,2) points 2D originaux (optionnel, pour comparaison)
+    """
+    found = False
+    for root, dirs, files in os.walk('preprocessed_images'):
+        if image_name in files:
+            img_path = os.path.join(root, image_name)
+            found = True
+            break
+    if not found:
+        print(f"[Info] Image {image_name} non trouvée dans preprocessed_images/.")
+        return
+    image = cv2.imread(img_path)
+    if image is None:
+        print(f"[Info] Impossible de lire l'image {img_path}.")
+        return
+    points_3d = np.asarray(points_3d)
+    # Mise à l'échelle des X,Y des points 3D selon les min/max des points 2D originaux
+    rvec, _ = cv2.Rodrigues(R)
+    tvec = t.reshape(3, 1)
+    pts2d_proj, _ = cv2.projectPoints(points_3d, rvec, tvec, intrinsic, None)
+    pts2d_proj = pts2d_proj.squeeze()
+    if original_2d_points is not None and len(original_2d_points) > 0 and len(points_3d) > 0:
+        min_2d, max_2d = original_2d_points.min(axis=0), original_2d_points.max(axis=0)
+        min_proj, max_proj = pts2d_proj.min(axis=0), pts2d_proj.max(axis=0)
+        min_3d, max_3d = points_3d[:, :2].min(axis=0), points_3d[:, :2].max(axis=0)
+        
+        scale = (max_2d - min_2d) / (max_3d - min_3d + 1e-8)
+        scale_proj = (max_2d - min_2d) / (max_proj - min_proj + 1e-8)
+        
+        scale = np.mean(scale)  # Pour garder le ratio
+        scale_proj = np.mean(scale_proj)  # Pour garder le ratio
+        
+        points_3d_scaled = points_3d.copy()
+        pts2d_proj_scaled = pts2d_proj.copy()
+        
+        points_3d_scaled[:, 0] = (points_3d[:, 0] - min_3d[0]) * scale + min_2d[0]
+        points_3d_scaled[:, 1] = (points_3d[:, 1] - min_3d[1]) * scale + min_2d[1]
+        
+        pts2d_proj_scaled[:, 0] = (pts2d_proj[:, 0] - min_proj[0]) * scale_proj + min_2d[0]
+        pts2d_proj_scaled[:, 1] = (pts2d_proj[:, 1] - min_proj[1]) * scale_proj + min_2d[1]
+    else:
+        points_3d_scaled = points_3d
+    # Projection des points 3D sur le plan image (avec la calibration)
+   
+    # Coloration des points 3D selon le niveau de gris de l'image (si possible)
+    colors_3d = 'lime'
+    if image is not None and len(points_3d_scaled) > 0:
+        h, w = image.shape[:2]
+        # On prend les coordonnées XY projetées (après mise à l'échelle) dans le plan image
+        xy = np.round(pts2d_proj_scaled).astype(int)
+        # Clamp pour rester dans l'image
+        xy[:, 0] = np.clip(xy[:, 0], 0, w - 1)
+        xy[:, 1] = np.clip(xy[:, 1], 0, h - 1)
+        # Récupérer le niveau de gris (moyenne RGB si image couleur)
+        if image.ndim == 3:
+            gray = image[xy[:, 1], xy[:, 0]].mean(axis=1) / 255.0
+        else:
+            gray = image[xy[:, 1], xy[:, 0]] / 255.0
+        # Utiliser une colormap matplotlib pour la couleur
+        import matplotlib.cm as cm
+        cmap = cm.get_cmap('gray')
+        colors_3d = cmap(gray)
+    # Affichage
+    fig = plt.figure(figsize=(12, 10))
+    ax = fig.add_subplot(111, projection='3d')
+    # Afficher l'image dans le plan (x, y, 0)
+    if image is not None:
+        h, w = image.shape[:2]
+        x_img = np.linspace(0, w, w)
+        y_img = np.linspace(0, h, h)
+        X_img, Y_img = np.meshgrid(x_img, y_img)
+        Z_img = np.zeros_like(X_img)
+        #img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) / 255.0
+        #ax.plot_surface(X_img, Y_img, Z_img, rstride=10, cstride=10, facecolors=img_rgb, shade=False, alpha=0.5)
+    # Afficher les points 2D originaux dans le plan z=0
+    if original_2d_points is not None and len(original_2d_points) > 0:
+        ax.scatter(original_2d_points[:, 0], original_2d_points[:, 1], np.zeros_like(original_2d_points[:, 0]), color='red', s=10, label='Points 2D originaux')
+    # Afficher les points 3D (mis à l'échelle) avec couleur
+    ax.scatter(points_3d_scaled[:, 0], points_3d_scaled[:, 1], points_3d_scaled[:, 2], color=colors_3d, s=10, label="Points 3D (XY mis à l'échelle, niveau de gris)")
+    # Afficher la projection des points 3D sur le plan z=0
+    if len(pts2d_proj_scaled.shape) == 1:
+        pts2d_proj_scaled = pts2d_proj_scaled[None, :]
+    ax.scatter(pts2d_proj_scaled[:, 0], pts2d_proj_scaled[:, 1], np.zeros_like(pts2d_proj_scaled[:, 0]), color='blue', s=10, label='Points 3D projetés (z=0)')
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    ax.set_zlabel('z')
+    ax.set_title(f'Image, points 2D (z=0), points 3D (XY mis à l\'échelle) et projection 3D->2D')
+    ax.legend()
+    plt.show(block=False)
+    plt.pause(0.001)
