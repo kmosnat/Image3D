@@ -21,6 +21,9 @@ def estimate_intrinsic_parameters(matches, dimensions):
         if image2 not in image_names:
             image_names.append(image2)
 
+    unique_images = set(image_names)
+    num_images = len(unique_images)
+
     image_points = {}
     for (image1, image2), match_points in matches.items():
         if image1 not in image_points:
@@ -73,6 +76,143 @@ def estimate_intrinsic_parameters(matches, dimensions):
 
     return camera_matrices, dist_coeffs
 
+def load_camera_parameters(filename):
+    # Loads camera parameters from a specified CSV file.
+    # The parameters include rotation vectors and translation vectors for each image.
+    # Converts the rotation vectors to rotation matrices.
+    # Returns a dictionary mapping each image to its corresponding camera parameters.
+    camera_params = {}
+    with open(filename, 'r') as file:
+        reader = csv.reader(file)
+        next(reader)  # Skip the header
+        for row in reader:
+            if len(row) != 7:
+                print(f"Skipping invalid row: {row}")
+                continue
+            image, rvec1, rvec2, rvec3, tvec1, tvec2, tvec3 = row
+            rvec = np.array([float(rvec1), float(rvec2), float(rvec3)])
+            tvec = np.array([float(tvec1), float(tvec2), float(tvec3)])
+
+            # Convert rotation vector to rotation matrix
+            r_mat, _ = cv2.Rodrigues(rvec)
+
+            camera_params[image] = {'r_mat': r_mat, 'tvec': tvec}
+    return camera_params
+
+
+def load_feature_matches(csv_file):
+    # Loads feature matches and image dimensions from a CSV file.
+    # Organizes the matches into a dictionary indexed by image pairs and stores image dimensions.
+    matches = {}
+    dimensions = {}
+    with open(csv_file, 'r') as file:
+        reader = csv.reader(file)
+        next(reader)  # Skip the header
+        for row in reader:
+            # Unpack all values from each row
+            image1, image2, x1, y1, x2, y2, w1, h1, w2, h2 = row
+            if (image1, image2) not in matches:
+                matches[(image1, image2)] = []
+                dimensions[image1] = (int(w1), int(h1))
+                dimensions[image2] = (int(w2), int(h2))
+            matches[(image1, image2)].append(
+                (float(x1), float(y1), float(x2), float(y2)))
+    return matches, dimensions
+
+
+def estimate_camera_parameters(matches, dimensions):
+    import math
+    camera_params = {}
+
+    for (image1, image2), match_points in matches.items():
+        w1, h1 = dimensions[image1]
+        w2, h2 = dimensions[image2]
+        avg_width = (w1 + w2) / 2
+        avg_height = (h1 + h2) / 2
+
+        intrinsic = o3d.camera.PinholeCameraIntrinsic(int(avg_width), int(avg_height),
+                                                      avg_width, avg_width,
+                                                      avg_width / 2, avg_height / 2)
+        intrinsic_parameters = intrinsic.intrinsic_matrix.astype(np.float64)
+
+        # Construct point arrays
+        object_points = np.array([[x, y, 0] for x, y, _, _ in match_points], dtype=np.float32)
+        image_points = np.array([[x, y] for _, _, x, y in match_points], dtype=np.float32)
+
+        try:
+            success, rvec, tvec, inliers = cv2.solvePnPRansac(
+                object_points, image_points, intrinsic_parameters, None
+            )
+            if not success or inliers is None or len(inliers) < 5:
+                print(f"Not enough inliers for image pair: {image1} - {image2}. Skipping.")
+                continue
+        except cv2.error as e:
+            print(f"[RANSAC Error] Pair: {image1} - {image2} | {str(e)}")
+            continue
+
+        # Filter using inliers
+        object_points = object_points[inliers.ravel()]
+        image_points = image_points[inliers.ravel()]
+
+        # Defensive checks
+        if object_points.ndim != 2 or image_points.ndim != 2:
+            print(f"[Shape Error] Object or image points not 2D for pair {image1} - {image2}")
+            continue
+        if object_points.shape[0] < 4 or image_points.shape[0] < 4:
+            print(f"[Point Count Error] < 4 points after inlier filtering for pair {image1} - {image2}")
+            continue
+        if object_points.shape[1] != 3 or image_points.shape[1] != 2:
+            print(f"[Dim Error] Wrong shape after filtering for pair {image1} - {image2}")
+            continue
+        if not np.all(np.isfinite(object_points)) or not np.all(np.isfinite(image_points)):
+            print(f"[NaN/Inf Error] Found non-finite values in pair {image1} - {image2}")
+            continue
+
+        try:
+            _, rvec, tvec = cv2.solvePnP(
+                object_points, image_points, intrinsic_parameters, None
+            )
+        except cv2.error as e:
+            print(f"[solvePnP Error] Pair: {image1} - {image2} | {str(e)}")
+            continue
+
+        # Optional: compute reprojection error
+        proj_points, _ = cv2.projectPoints(
+            object_points, rvec, tvec, intrinsic_parameters, None)
+        error = np.mean(np.linalg.norm(proj_points.squeeze() - image_points, axis=1))
+
+        # Convert rvec to matrix
+        r_mat, _ = cv2.Rodrigues(rvec)
+        camera_params[image1] = {'r_mat': r_mat, 'tvec': tvec}
+        camera_params[image2] = {'r_mat': r_mat, 'tvec': tvec}
+
+    return camera_params
+
+
+def save_camera_params_to_file(camera_params, filename):
+    # Saves the estimated camera parameters to a CSV file.
+    with open(filename, 'w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(['Image', 'rvec1', 'rvec2',
+                        'rvec3', 'tvec1', 'tvec2', 'tvec3'])
+        for image, params in camera_params.items():
+            r_mat, tvec = params['r_mat'], params['tvec']
+            rvec, _ = cv2.Rodrigues(r_mat)
+            file.write(
+                f"{image},{rvec[0][0]},{rvec[1][0]},{rvec[2][0]},{tvec[0][0]},{tvec[1][0]},{tvec[2][0]}\n")
+
+
+def save_intrinsic_params_to_file(intrinsic_matrices, dist_coeffs, filename):
+    # Saves the estimated intrinsic parameters and distortion coefficients to a CSV file.
+    with open(filename, 'w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(['Image', 'Camera Matrix', 'Distortion Coefficients'])
+        for image, intrinsic in intrinsic_matrices.items():
+            dist = dist_coeffs[image]
+            writer.writerow(
+                [image, intrinsic.flatten().tolist(), dist.flatten().tolist()])
+
+
 def calibrate_camera_with_chessboard(image_folder, pattern_size=(11, 8), square_size=1.5):
     objp = np.zeros((pattern_size[1] * pattern_size[0], 3), np.float32)
     objp[:, :2] = np.mgrid[0:pattern_size[0], 0:pattern_size[1]].T.reshape(-1, 2)
@@ -120,127 +260,3 @@ def calibrate_camera_with_chessboard(image_folder, pattern_size=(11, 8), square_
         print("Coefficients de distorsion :\n", dist_coeffs)
 
     return camera_matrix, dist_coeffs
-
-def load_camera_parameters(filename):
-    camera_params = {}
-    with open(filename, 'r') as file:
-        reader = csv.reader(file)
-        next(reader)  # Skip the header
-        for row in reader:
-            if len(row) != 7:
-                print(f"Skipping invalid row: {row}")
-                continue
-            image, rvec1, rvec2, rvec3, tvec1, tvec2, tvec3 = row
-            rvec = np.array([float(rvec1), float(rvec2), float(rvec3)])
-            tvec = np.array([float(tvec1), float(tvec2), float(tvec3)])
-
-            # Convert rotation vector to rotation matrix
-            r_mat, _ = cv2.Rodrigues(rvec)
-
-            camera_params[image] = {'r_mat': r_mat, 'tvec': tvec}
-    return camera_params
-
-
-def load_feature_matches(csv_file):
-    matches = {}
-    dimensions = {}
-    with open(csv_file, 'r') as file:
-        reader = csv.reader(file)
-        next(reader)  # Skip the header
-        for row in reader:
-            # Unpack all values from each row
-            image1, image2, x1, y1, x2, y2, w1, h1, w2, h2 = row
-            if (image1, image2) not in matches:
-                matches[(image1, image2)] = []
-                dimensions[image1] = (int(w1), int(h1))
-                dimensions[image2] = (int(w2), int(h2))
-            matches[(image1, image2)].append(
-                (float(x1), float(y1), float(x2), float(y2)))
-    return matches, dimensions
-
-
-def estimate_camera_parameters(matches, dimensions):
-    camera_params = {}
-
-    for (image1, image2), match_points in matches.items():
-        w1, h1 = dimensions[image1]
-        w2, h2 = dimensions[image2]
-        avg_width  = (w1 + w2) / 2.0
-        avg_height = (h1 + h2) / 2.0
-
-        intrinsic = o3d.camera.PinholeCameraIntrinsic(
-            int(avg_width), int(avg_height),
-            avg_width, avg_height,
-            avg_width / 2.0, avg_height / 2.0
-        )
-        K = intrinsic.intrinsic_matrix.astype(np.float64)
-
-        D = np.zeros((5, 1), dtype=np.float64)
-
-        pts1 = np.array([[x1, y1] for x1, y1, x2, y2 in match_points], dtype=np.float32)
-        pts2 = np.array([[x2, y2] for x1, y1, x2, y2 in match_points], dtype=np.float32)
-
-        if pts1.shape[0] < 5:
-            print(f"[Warning] Moins de 5 correspondances pour {image1}–{image2}, on skip cette paire.")
-            continue
-
-        pts1_undist = cv2.undistortPoints(pts1, K, D)  # shape (N,1,2)
-        pts2_undist = cv2.undistortPoints(pts2, K, D)  # shape (N,1,2)
-
-        pts1_norm = pts1_undist.reshape(-1, 2)
-        pts2_norm = pts2_undist.reshape(-1, 2)
-
-        E, maskE = cv2.findEssentialMat(
-            pts1_norm, pts2_norm,
-            focal=1.0, pp=(0.0, 0.0),
-            method=cv2.RANSAC, prob=0.999, threshold=1.0
-        )
-        if E is None or E.size == 0:
-            print(f"[Error] Impossible de calculer E pour {image1}–{image2}.")
-            continue
-
-        inlier_ratio = float(np.sum(maskE)) / maskE.shape[0]
-        print(f"  {image1}–{image2} : EssentialMatrix trouvée, inliers = {np.sum(maskE)}/{maskE.shape[0]} ({inlier_ratio*100:.1f}%)")
-
-        _, R_rel, t_rel, mask_pose = cv2.recoverPose(
-            E,
-            pts1_norm, pts2_norm,
-            focal=1.0, pp=(0.0, 0.0)
-        )
-        inlier_pose = int(np.sum(mask_pose))
-        print(f"  {image1}–{image2} : recoverPose utilisé {inlier_pose} points sur {pts1_norm.shape[0]}")
-
-        R1 = np.eye(3, dtype=np.float64)
-        t1 = np.zeros((3, 1), dtype=np.float64)
-
-        R2 = R_rel.astype(np.float64)
-        t2 = t_rel.astype(np.float64)
-
-        camera_params[image1] = {'r_mat': R1, 'tvec': t1, 'K': K.copy(), 'D': D.copy()}
-        camera_params[image2] = {'r_mat': R2, 'tvec': t2, 'K': K.copy(), 'D': D.copy()}
-
-    return camera_params
-
-def save_camera_params_to_file(camera_params, filename):
-    # Saves the estimated camera parameters to a CSV file.
-    with open(filename, 'w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(['Image', 'rvec1', 'rvec2',
-                        'rvec3', 'tvec1', 'tvec2', 'tvec3'])
-        for image, params in camera_params.items():
-            r_mat, tvec = params['r_mat'], params['tvec']
-            rvec, _ = cv2.Rodrigues(r_mat)
-            file.write(
-                f"{image},{rvec[0][0]},{rvec[1][0]},{rvec[2][0]},{tvec[0][0]},{tvec[1][0]},{tvec[2][0]}\n")
-
-
-def save_intrinsic_params_to_file(intrinsic_matrices, dist_coeffs, filename):
-    # Saves the estimated intrinsic parameters and distortion coefficients to a CSV file.
-    with open(filename, 'w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(['Image', 'Camera Matrix', 'Distortion Coefficients'])
-        for image, intrinsic in intrinsic_matrices.items():
-            dist = dist_coeffs[image]
-            writer.writerow(
-                [image, intrinsic.flatten().tolist(), dist.flatten().tolist()])
-
