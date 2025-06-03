@@ -35,6 +35,7 @@ def save_matches_to_csv(matches, filename):
 
 def main(batch, visualize=False):
     images_path = f'images/{batch}/'
+    image_calib_path = f'images/{batch}/calib/'
     preprocessed_path = f'preprocessed_images/{batch}/'
     matching_output_path = f'output/feature_matching/{batch}/'
     
@@ -51,10 +52,12 @@ def main(batch, visualize=False):
 
     # Estimation des paramètres caméra
     cam_params = estimate_camera_parameters(matches, dimensions)
-    intrinsics, dist_coeffs = estimate_intrinsic_parameters(matches, dimensions)
+    #intrinsics, dist_coeffs = estimate_intrinsic_parameters(matches, dimensions)
+
+    intrinsics, dist_coeffs = calibrate_camera_with_chessboard(image_calib_path)
 
     save_camera_params_to_file(cam_params, 'camera_parameters.csv')
-    save_intrinsic_params_to_file(intrinsics, dist_coeffs, 'intrinsic_parameters.csv')
+    #save_intrinsic_params_to_file(intrinsics, dist_coeffs, 'intrinsic_parameters.csv')
 
     # Reconstruction 3D
     points_3d = triangulate_points(matches, cam_params, intrinsics, dist_coeffs).astype(np.float64)

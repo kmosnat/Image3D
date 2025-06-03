@@ -25,7 +25,7 @@ def preprocess_image(image):
     gray_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2GRAY)
 
     # Optionally apply histogram equalization
-    gray_image = cv2.equalizeHist(gray_image)
+    #gray_image = cv2.equalizeHist(gray_image)
 
     return gray_image
 

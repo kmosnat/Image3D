@@ -213,11 +213,10 @@ def save_intrinsic_params_to_file(intrinsic_matrices, dist_coeffs, filename):
                 [image, intrinsic.flatten().tolist(), dist.flatten().tolist()])
 
 
-def calibrate_camera_with_chessboard(image_folder, pattern_size=(11, 8), square_size=1.5):
+def calibrate_camera_with_chessboard(image_folder, pattern_size=(10, 7), square_size=2):
     objp = np.zeros((pattern_size[1] * pattern_size[0], 3), np.float32)
     objp[:, :2] = np.mgrid[0:pattern_size[0], 0:pattern_size[1]].T.reshape(-1, 2)
-    objp *= square_size  # Mettre à l'échelle selon la taille réelle des carrés
-
+    objp *= square_size
     objpoints = []
     imgpoints = []
 

@@ -34,94 +34,76 @@ def load_intrinsic_parameters(filename):
     return intrinsic_matrices, dist_coeffs
 
 
-def triangulate_points(matches, camera_params, intrinsic_matrices, dist_coeffs):
-    # Triangulates 3D points from 2D feature matches using camera and intrinsic parameters.
-    # This function forms the core of 3D scene reconstruction by converting 2D image points to 3D points.
+def triangulate_points(matches, camera_params, intrinsic_matrix, dist_coeffs):
+    print(intrinsic_matrix)
+    print(dist_coeffs)
 
     all_points_3d = []
-    # Initialisation des poses globales
     global_poses = {}
-    # La première image est l'origine
     global_poses[None] = (np.eye(3), np.zeros((3, 1)))
     prev_img = None
+
     for (img1, img2), match_pts in matches.items():
         print(f"Processing pair: {img1} and {img2}")
 
-        # Check if both images have camera parameters and intrinsic parameters
         if img1 not in camera_params or img2 not in camera_params:
-            print(
-                f"Camera parameters for {img1} or {img2} are missing. Skipping.")
+            print(f"Camera parameters for {img1} or {img2} are missing. Skipping.")
             continue
-
-        if img1 not in intrinsic_matrices or img2 not in intrinsic_matrices:
-            print(
-                f"Intrinsic parameters for {img1} or {img2} are missing. Skipping.")
-            continue
-
-        intrinsic1 = intrinsic_matrices[img1]
-        intrinsic2 = intrinsic_matrices[img2]
-        dist1 = dist_coeffs[img1]
-        dist2 = dist_coeffs[img2]
 
         pts1 = np.float32([pt[0:2] for pt in match_pts])
         pts2 = np.float32([pt[2:4] for pt in match_pts])
 
-        # Correction de la distorsion
-        pts1_undist = pts1 #cv2.undistortPoints(
-            #np.expand_dims(pts1, axis=1), intrinsic1, dist1).squeeze()
-        pts2_undist = pts2 #cv2.undistortPoints(
-            #np.expand_dims(pts2, axis=1), intrinsic2, dist2).squeeze()
+        # Correction de la distorsion (désactivée pour le moment)
+        pts1_undist = pts1  # Ou utiliser cv2.undistortPoints(...) si nécessaire
+        pts2_undist = pts2
 
-        #visualize_distortion_field(img1, pts1, intrinsic1, dist1)
-        #visualize_distortion_field(img2, pts2, intrinsic2, dist2)
+        visualize_distortion_field(img1, pts1, intrinsic_matrix, dist_coeffs)
+        #visualize_distortion_field(img2, pts2, intrinsic_matrix, dist_coeffs)
 
-        # Triangulate points using relative pose estimated from the image pair
         E, mask = cv2.findEssentialMat(
             pts1_undist, pts2_undist, np.eye(3), method=cv2.RANSAC, prob=0.999, threshold=1.0)
+
+        if E is None or E.shape[0] < 3 or E.shape[1] != 3:
+            print(f"Invalid essential matrix for pair {img1}-{img2}, skipping.")
+            continue
+        if E.shape[0] > 3:
+            E = E[:3, :3]
+
         _, R_rel, t_rel, mask_pose = cv2.recoverPose(E, pts1_undist, pts2_undist, np.eye(3))
+
         inliers = mask_pose.ravel() > 0
         pts1_undist = pts1_undist[inliers]
         pts2_undist = pts2_undist[inliers]
 
-        # Pose absolue de img1
         if img1 not in global_poses:
             if prev_img is None:
-                # Première image : origine
                 global_poses[img1] = (np.eye(3), np.zeros((3, 1)))
             else:
                 global_poses[img1] = global_poses[prev_img]
 
-        # Pose absolue de img2
         R1, t1 = global_poses[img1]
         R2 = R1 @ R_rel
         t2 = R1 @ t_rel + t1
         global_poses[img2] = (R2, t2)
+
         decompose_pose(R_rel, t_rel, seq='xyz', degrees=True)
-        # Matrices de projection dans le repère de la première image
+
         P1 = np.hstack((R1, t1))
         P2 = np.hstack((R2, t2))
         pts_4d_hom = cv2.triangulatePoints(P1, P2, pts1_undist.T, pts2_undist.T)
-
-        # Convert homogeneous coordinates to 3D points
         pts_3d = pts_4d_hom[:3] / pts_4d_hom[3]
+
         all_points_3d.append(pts_3d.T)
-        # Visualisation des points 3D de la paire courante
+
         plot_3d_points(pts_3d.T, title=f"Nuage 3D pour la paire {img1} - {img2}")
-        #plot_depth_histogram(pts_3d.T)
-        # Visualisation de la projection des points 3D sur l'image d'origine (img1)
-        project_and_show_on_image(img1, pts_3d.T, intrinsic1, R1, t1, pts1_undist)
+        project_and_show_on_image(img1, pts_3d.T, intrinsic_matrix, R1, t1, pts1_undist)
+
         prev_img = img2
 
-    # Combine all 3D points from each image pair
-    points_3d = np.concatenate(
-        all_points_3d, axis=0) if all_points_3d else np.empty((0, 3))
-
-    # Filter out invalid points (removing NaNs and infinite values)
-    valid_points = points_3d[~np.isnan(points_3d).any(
-        axis=1) & ~np.isinf(points_3d).any(axis=1)]
+    points_3d = np.concatenate(all_points_3d, axis=0) if all_points_3d else np.empty((0, 3))
+    valid_points = points_3d[~np.isnan(points_3d).any(axis=1) & ~np.isinf(points_3d).any(axis=1)]
     print(f"Total valid 3D points: {len(valid_points)}")
 
-    # Visualisation du nuage de points global et de la trajectoire caméra
     plot_3d_points(valid_points, title="Nuage de points 3D global")
     plot_depth_histogram(valid_points)
     plot_camera_trajectory(global_poses)

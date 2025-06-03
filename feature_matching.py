@@ -10,16 +10,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # Initialize SIFT with custom parameters
-nfeatures = 25000  # Increase for more features
-contrastThreshold = 0.0001  # Decrease to retain more features with lower contrast
+nfeatures = 5000  # Increase for more features
+contrastThreshold = 0.1  # Decrease to retain more features with lower contrast
 edgeThreshold = 100  # Decrease to retain more features that are edge-like
 sigma = 1.6  # Typically left at default
 
 sift = cv2.SIFT_create(nfeatures=nfeatures, nOctaveLayers = 6, contrastThreshold=contrastThreshold,
                        edgeThreshold=edgeThreshold, sigma=sigma)
-
-orb = cv2.ORB_create()
-
 
 def draw_title(img, title, font_scale=1, font=cv2.FONT_HERSHEY_SIMPLEX, y_offset=30):
     # Adds a title to an image at a specified position.
@@ -75,7 +72,8 @@ def detect_and_match_features(image1, image2, sift, pair_name, save_path):
     # Store all good matches as per Lowe's ratio test.
     good_matches = []
     for m, n in matches:
-        good_matches.append(m)
+        if m.distance < 0.7 * n.distance:
+            good_matches.append(m)
 
     print(f"{len(good_matches)} matches passed Lowe's ratio test.")
 
@@ -87,7 +85,7 @@ def detect_and_match_features(image1, image2, sift, pair_name, save_path):
             [keypoints2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
 
         matrix, mask = cv2.findHomography(
-            ptsA, ptsB, cv2.RANSAC, 10.0, maxIters=2000)
+            ptsA, ptsB, cv2.RANSAC, 10.0)
         if mask is not None:
             matchesMask = mask.ravel().tolist()
             good_matches = [gm for gm, mask in zip(
@@ -102,7 +100,7 @@ def detect_and_match_features(image1, image2, sift, pair_name, save_path):
 
     # Draw top matches
     img_matches = cv2.drawMatches(image1, keypoints1, image2, keypoints2,
-                                  good_matches[:30000], None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+                                  good_matches[:1000], None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
 
     # Adding title to the image
     draw_title(img_matches, 'Feature Matches')
