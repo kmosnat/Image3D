@@ -46,7 +46,7 @@ def main(batch, visualize=False):
     # Appariement de caractéristiques
     manual_matching = True
     if manual_matching:
-        matches = launch_selector(images, matching_output_path)
+        matches = launch_selector(images, matching_output_path, 18)
     else:
         matches = process_feature_matching(images, matching_output_path)
     save_matches_to_csv(matches, 'feature_matches.csv')

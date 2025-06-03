@@ -114,7 +114,8 @@ def triangulate_points(matches, camera_params, intrinsic_matrix, dist_coeffs):
         P2 = np.hstack((R2, t2))
         pts_4d_hom = cv2.triangulatePoints(P1, P2, pts1_undist.T, pts2_undist.T)
         pts_3d = pts_4d_hom[:3] / pts_4d_hom[3]
-
+        pts_3d[2] *= -1  # Inverser l'axe Z pour correspondre à la convention de la caméra
+        
         all_points_3d.append(pts_3d.T)
 
         plot_3d_points(pts_3d.T, title=f"Nuage 3D pour la paire {img1} - {img2}")
@@ -289,7 +290,8 @@ def decompose_pose(R_mat, t_vec, seq='xyz', degrees=True):
 
 def plot_3d_points(points_3d, title="Nuage de points 3D"):
     """
-    Affiche un nuage de points 3D avec matplotlib, et trace une ligne entre chaque point et le suivant, ainsi qu'entre le dernier et le premier.
+    Affiche un nuage de points 3D avec matplotlib, trace une ligne entre chaque point et le suivant (et ferme la boucle),
+    et affiche une légende (numéro) à côté de chaque point.
     """
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection='3d')
@@ -300,6 +302,9 @@ def plot_3d_points(points_3d, title="Nuage de points 3D"):
             p1 = points_3d[i]
             p2 = points_3d[(i + 1) % len(points_3d)]  # le suivant, ou le premier si dernier
             ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]], color='orange', linewidth=1)
+    # Afficher le numéro de chaque point
+    for i, (x, y, z) in enumerate(points_3d):
+        ax.text(x, y, z, str(i), color='black', fontsize=9, ha='left', va='bottom')
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')

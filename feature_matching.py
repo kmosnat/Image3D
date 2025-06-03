@@ -140,6 +140,7 @@ def launch_selector(images, matching_output_path, num_points=6):
     Retourne une liste de matches au format :
     [img1_name, img2_name, x1, y1, x2, y2, w1, h1, w2, h2]
     pour chaque paire consécutive d'images.
+    Ajoute la visualisation des correspondances (drawMatches, draw_title, sauvegarde) pour chaque paire.
     """
     selected_points = {}
     nb_max_img  = 2
@@ -178,6 +179,26 @@ def launch_selector(images, matching_output_path, num_points=6):
         h1, w1 = img1.shape[:2]
         h2, w2 = img2.shape[:2]
         n = min(len(pts1), len(pts2))
+        # Visualisation des correspondances manuelles
+        keypoints1 = [cv2.KeyPoint(float(x), float(y), 1) for x, y in pts1[:n]]
+        keypoints2 = [cv2.KeyPoint(float(x), float(y), 1) for x, y in pts2[:n]]
+        good_matches = [cv2.DMatch(_queryIdx=k, _trainIdx=k, _imgIdx=0, _distance=0) for k in range(n)]
+        img_matches = cv2.drawMatches(img1, keypoints1, img2, keypoints2,
+                                      good_matches, None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+        # Ajout du titre
+        draw_title(img_matches, 'Manual Feature Matches')
+        # Redimensionnement
+        desired_width = 1200
+        scale_ratio = desired_width / img_matches.shape[1]
+        img_matches = cv2.resize(img_matches, None, fx=scale_ratio, fy=scale_ratio)
+        # Sauvegarde
+        pair_name = f"{os.path.splitext(os.path.basename(img1_name))[0]}_{os.path.splitext(os.path.basename(img2_name))[0]}"
+        save_path = os.path.join(matching_output_path)
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
+        output_file = os.path.join(save_path, f"matches_{pair_name}.png")
+        cv2.imwrite(output_file, img_matches)
+        print(f"Saved manual matching visualization to {output_file}")
         for k in range(n):
             x1, y1 = pts1[k]
             x2, y2 = pts2[k]
