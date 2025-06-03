@@ -65,6 +65,9 @@ def estimate_intrinsic_parameters(matches, dimensions):
         print(f"Number of object points: {len(obj_points)}")
         print(f"Number of image points: {len(img_points)}")
         print(f"Shape of image points for current image: {img_points.shape}")
+        print(f"Shape of object points for current image: {obj_points.shape}")
+        print(f"Camera matrix shape: {camera_matrix.shape}")
+        print(f"Distortion coefficients shape: {dist_coeff.shape}")
 
         _, camera_matrix, dist_coeff, _, _ = cv2.calibrateCamera(
             [obj_points], [img_points], (w, h), camera_matrix, dist_coeff,
@@ -120,7 +123,7 @@ def load_feature_matches(csv_file):
     return matches, dimensions
 
 
-def estimate_camera_parameters(matches, dimensions):
+def estimate_camera_parameters(matches, dimensions, ransac_filter=True):
     import math
     camera_params = {}
 
@@ -139,34 +142,35 @@ def estimate_camera_parameters(matches, dimensions):
         object_points = np.array([[x, y, 0] for x, y, _, _ in match_points], dtype=np.float32)
         image_points = np.array([[x, y] for _, _, x, y in match_points], dtype=np.float32)
 
-        try:
-            success, rvec, tvec, inliers = cv2.solvePnPRansac(
-                object_points, image_points, intrinsic_parameters, None
-            )
-            if not success or inliers is None or len(inliers) < 5:
-                print(f"Not enough inliers for image pair: {image1} - {image2}. Skipping.")
+        if ransac_filter:
+            try:
+                success, rvec, tvec, inliers = cv2.solvePnPRansac(
+                    object_points, image_points, intrinsic_parameters, None
+                )
+                if not success or inliers is None or len(inliers) < 5:
+                    print(f"Not enough inliers for image pair: {image1} - {image2}. Skipping.")
+                    continue
+            except cv2.error as e:
+                print(f"[RANSAC Error] Pair: {image1} - {image2} | {str(e)}")
                 continue
-        except cv2.error as e:
-            print(f"[RANSAC Error] Pair: {image1} - {image2} | {str(e)}")
-            continue
-
-        # Filter using inliers
-        object_points = object_points[inliers.ravel()]
-        image_points = image_points[inliers.ravel()]
-
-        # Defensive checks
-        if object_points.ndim != 2 or image_points.ndim != 2:
-            print(f"[Shape Error] Object or image points not 2D for pair {image1} - {image2}")
-            continue
-        if object_points.shape[0] < 4 or image_points.shape[0] < 4:
-            print(f"[Point Count Error] < 4 points after inlier filtering for pair {image1} - {image2}")
-            continue
-        if object_points.shape[1] != 3 or image_points.shape[1] != 2:
-            print(f"[Dim Error] Wrong shape after filtering for pair {image1} - {image2}")
-            continue
-        if not np.all(np.isfinite(object_points)) or not np.all(np.isfinite(image_points)):
-            print(f"[NaN/Inf Error] Found non-finite values in pair {image1} - {image2}")
-            continue
+            
+            # Filter using inliers
+            object_points = object_points[inliers.ravel()]
+            image_points = image_points[inliers.ravel()]
+       
+            # Defensive checks
+            if object_points.ndim != 2 or image_points.ndim != 2:
+                print(f"[Shape Error] Object or image points not 2D for pair {image1} - {image2}")
+                continue
+            if object_points.shape[0] < 4 or image_points.shape[0] < 4:
+                print(f"[Point Count Error] < 4 points after inlier filtering for pair {image1} - {image2}")
+                continue
+            if object_points.shape[1] != 3 or image_points.shape[1] != 2:
+                print(f"[Dim Error] Wrong shape after filtering for pair {image1} - {image2}")
+                continue
+            if not np.all(np.isfinite(object_points)) or not np.all(np.isfinite(image_points)):
+                print(f"[NaN/Inf Error] Found non-finite values in pair {image1} - {image2}")
+                continue
 
         try:
             _, rvec, tvec = cv2.solvePnP(

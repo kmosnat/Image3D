@@ -130,3 +130,59 @@ def load_images_from_folder(folder):
         if img is not None:
             images.append((filename, img))
     return images
+
+
+def launch_selector(images, matching_output_path, num_points=6):
+    """
+    Permet à l'utilisateur de sélectionner manuellement des points sur chaque image.
+    Prend en entrée une liste de tuples (filename, image).
+    Ouvre chaque image, attend num_points clics, puis passe à la suivante.
+    Retourne une liste de matches au format :
+    [img1_name, img2_name, x1, y1, x2, y2, w1, h1, w2, h2]
+    pour chaque paire consécutive d'images.
+    """
+    selected_points = {}
+    nb_max_img  = 3
+    for filename, img in images:
+        if img is None:
+            print(f"Impossible de lire {filename}")
+            continue
+        points = []
+        clone = img.copy()
+        window_name = f"Sélectionnez {num_points} points sur {os.path.basename(filename)}"
+        cv2.namedWindow(window_name)
+        def click_event(event, x, y, flags, param):
+            if event == cv2.EVENT_LBUTTONDOWN:
+                points.append((x, y))
+                cv2.circle(clone, (x, y), 5, (255, 255, 255), -1)
+                cv2.imshow(window_name, clone)
+        cv2.setMouseCallback(window_name, click_event)
+        print(f"[INFO] Cliquez {num_points} fois sur {filename}")
+        while len(points) < num_points:
+            cv2.imshow(window_name, clone)
+            if cv2.waitKey(1) & 0xFF == 27:  # ESC pour quitter
+                break
+        cv2.destroyWindow(window_name)
+        selected_points[filename] = np.array(points)
+        if(len(selected_points) >= nb_max_img):
+            print(f"Nombre maximum d'images ({nb_max_img}) atteint, arrêt de la sélection.")
+            break   
+    # Construction du format de matches pour chaque paire consécutive
+    matches = []
+    keys = list(selected_points.keys())
+    for i in range(1, len(keys)):
+        img1_name, img2_name = keys[i-1], keys[i]
+        pts1, pts2 = selected_points[img1_name], selected_points[img2_name]
+        img1 = [img for name, img in images if name == img1_name][0]
+        img2 = [img for name, img in images if name == img2_name][0]
+        h1, w1 = img1.shape[:2]
+        h2, w2 = img2.shape[:2]
+        n = min(len(pts1), len(pts2))
+        for k in range(n):
+            x1, y1 = pts1[k]
+            x2, y2 = pts2[k]
+            matches.append([img1_name, img2_name, x1, y1, x2, y2, w1, h1, w2, h2])
+    return matches
+
+
+
