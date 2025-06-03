@@ -43,6 +43,24 @@ def triangulate_points(matches, camera_params, intrinsic_matrix, dist_coeffs):
     global_poses[None] = (np.eye(3), np.zeros((3, 1)))
     prev_img = None
 
+    # Charger et undistort toutes les images une fois pour toutes
+    undistorted_images = {}
+    for img_name in set([k[0] for k in matches.keys()] + [k[1] for k in matches.keys()]):
+        img_path = None
+        for root, dirs, files in os.walk('preprocessed_images'):
+            if img_name in files:
+                img_path = os.path.join(root, img_name)
+                break
+        if img_path is not None:
+            img = cv2.imread(img_path)
+            if img is not None:
+                undistorted = cv2.undistort(img, intrinsic_matrix, dist_coeffs)
+                undistorted_images[img_name] = undistorted
+            else:
+                print(f"[Info] Impossible de lire l'image {img_path}.")
+        else:
+            print(f"[Info] Image {img_name} non trouvée dans preprocessed_images/.")
+
     for (img1, img2), match_pts in matches.items():
         print(f"Processing pair: {img1} and {img2}")
 
@@ -50,15 +68,19 @@ def triangulate_points(matches, camera_params, intrinsic_matrix, dist_coeffs):
             print(f"Camera parameters for {img1} or {img2} are missing. Skipping.")
             continue
 
+        # Utiliser les images undistortées
+        img1_undist = undistorted_images.get(img1, None)
+        img2_undist = undistorted_images.get(img2, None)
+        # ...existing code...
         pts1 = np.float32([pt[0:2] for pt in match_pts])
         pts2 = np.float32([pt[2:4] for pt in match_pts])
-
-        # Correction de la distorsion (désactivée pour le moment)
-        pts1_undist = pts1  # Ou utiliser cv2.undistortPoints(...) si nécessaire
-        pts2_undist = pts2
-
-        visualize_distortion_field(img1, pts1, intrinsic_matrix, dist_coeffs)
-        #visualize_distortion_field(img2, pts2, intrinsic_matrix, dist_coeffs)
+        # Les points sont déjà dans le repère image corrigé
+        pts1_undist = cv2.undistortPoints(
+            np.expand_dims(pts1, axis=1), intrinsic_matrix, dist_coeffs, P=intrinsic_matrix).squeeze()
+        pts2_undist = cv2.undistortPoints(
+            np.expand_dims(pts2, axis=1), intrinsic_matrix, dist_coeffs, P=intrinsic_matrix).squeeze()
+        visualize_distortion_field(img1, img1_undist, pts1, intrinsic_matrix, dist_coeffs)
+        visualize_distortion_field(img2, img2_undist, pts2, intrinsic_matrix, dist_coeffs)
 
         E, mask = cv2.findEssentialMat(
             pts1_undist, pts2_undist, np.eye(3), method=cv2.RANSAC, prob=0.999, threshold=1.0)
@@ -72,8 +94,8 @@ def triangulate_points(matches, camera_params, intrinsic_matrix, dist_coeffs):
         _, R_rel, t_rel, mask_pose = cv2.recoverPose(E, pts1_undist, pts2_undist, np.eye(3))
 
         inliers = mask_pose.ravel() > 0
-        pts1_undist = pts1_undist[inliers]
-        pts2_undist = pts2_undist[inliers]
+        #pts1_undist = pts1_undist[inliers]
+        #pts2_undist = pts2_undist[inliers]
 
         if img1 not in global_poses:
             if prev_img is None:
@@ -96,7 +118,7 @@ def triangulate_points(matches, camera_params, intrinsic_matrix, dist_coeffs):
         all_points_3d.append(pts_3d.T)
 
         plot_3d_points(pts_3d.T, title=f"Nuage 3D pour la paire {img1} - {img2}")
-        project_and_show_on_image(img1, pts_3d.T, intrinsic_matrix, R1, t1, pts1_undist)
+        #project_and_show_on_image(img1, pts_3d.T, intrinsic_matrix, R1, t1, pts1_undist)
 
         prev_img = img2
 
@@ -226,7 +248,7 @@ def export_mesh(mesh, filename):  # [AJOUT]
     else:
         print("Failed to export mesh.")
 
-def visualize_distortion_field(image_name, pts, intrinsic, dist):
+def visualize_distortion_field(image_name, image, pts, intrinsic, dist):
     """
     Affiche le champ de correction de distorsion pour les points donnés sur l'image.
     - image_name: nom du fichier image (ex: 'pic.0280.jpg' ou 'model_000.png')
@@ -236,25 +258,10 @@ def visualize_distortion_field(image_name, pts, intrinsic, dist):
     """
     # Recherche du chemin de l'image dans le dossier images/
     found = False
-    for root, dirs, files in os.walk('preprocessed_images'):
-        if image_name in files:
-            img_path = os.path.join(root, image_name)
-            found = True
-            break
-    if not found:
-        print(f"[Info] Image {image_name} non trouvée dans preprocessed_images/.")
-        return
-    image = cv2.imread(img_path)
-    if image is None:
-        print(f"[Info] Impossible de lire l'image {img_path}.")
-        return
     pts = np.float32(pts)
     pts_undist = cv2.undistortPoints(np.expand_dims(pts, axis=1), intrinsic, dist, P=intrinsic).squeeze()
     plt.figure(figsize=(10, 10))
-    if image.ndim == 2:
-        plt.imshow(image, cmap='gray')
-    else:
-        plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+    plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
     #plt.scatter(pts[:, 0], pts[:, 1], color='red', label='Original')
     print(len(pts), len(pts_undist))
     plt.scatter(pts_undist[:, 0], pts_undist[:, 1], color='blue', label='Corrigé')
@@ -282,11 +289,17 @@ def decompose_pose(R_mat, t_vec, seq='xyz', degrees=True):
 
 def plot_3d_points(points_3d, title="Nuage de points 3D"):
     """
-    Affiche un nuage de points 3D avec matplotlib.
+    Affiche un nuage de points 3D avec matplotlib, et trace une ligne entre chaque point et le suivant, ainsi qu'entre le dernier et le premier.
     """
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection='3d')
-    ax.scatter(points_3d[:, 0], points_3d[:, 1], points_3d[:, 2], s=1)
+    ax.scatter(points_3d[:, 0], points_3d[:, 1], points_3d[:, 2], s=15)
+    # Tracer les lignes entre chaque point et le suivant, et fermer la boucle
+    if len(points_3d) > 1:
+        for i in range(len(points_3d)-1):
+            p1 = points_3d[i]
+            p2 = points_3d[(i + 1) % len(points_3d)]  # le suivant, ou le premier si dernier
+            ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]], color='orange', linewidth=1)
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')

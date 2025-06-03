@@ -142,7 +142,7 @@ def launch_selector(images, matching_output_path, num_points=6):
     pour chaque paire consécutive d'images.
     """
     selected_points = {}
-    nb_max_img  = 3
+    nb_max_img  = 2
     for filename, img in images:
         if img is None:
             print(f"Impossible de lire {filename}")
