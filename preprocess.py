@@ -36,7 +36,7 @@ def process_images_in_folder(folder_path, output_folder=None):
     # This function is useful for batch processing of images for tasks like image analysis or machine learning input preparation.
     print(f"Processing images in folder: {folder_path}")
     for filename in os.listdir(folder_path):
-        if filename.lower().endswith(('.jpg', '.jpeg')):
+        if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
             file_path = os.path.join(folder_path, filename)
             print(f"Processing {file_path}...")
             image = cv2.imread(file_path)
