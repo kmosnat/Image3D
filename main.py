@@ -44,12 +44,14 @@ def main(batch, visualize=False):
     images = load_images_from_folder(preprocessed_path)
 
     # Appariement de caractéristiques
+    redo_points = False
     manual_matching = True
-    if manual_matching:
-        matches = launch_selector(images, matching_output_path, 18)
-    else:
-        matches = process_feature_matching(images, matching_output_path)
-    save_matches_to_csv(matches, 'feature_matches.csv')
+    if redo_points:
+        if manual_matching:
+            matches = launch_selector(images, matching_output_path, 28)
+        else:
+            matches = process_feature_matching(images, matching_output_path)
+        save_matches_to_csv(matches, 'feature_matches.csv')
 
     # Chargement des données
     matches, dimensions = load_feature_matches('feature_matches.csv')
@@ -65,7 +67,7 @@ def main(batch, visualize=False):
     #save_intrinsic_params_to_file(intrinsics, dist_coeffs, 'intrinsic_parameters.csv')
 
     # Reconstruction 3D
-    points_3d = triangulate_points(matches, cam_params, intrinsics, dist_coeffs).astype(np.float64)
+    points_3d = triangulate_multiview(matches, intrinsics, dist_coeffs).astype(np.float64)
     point_cloud = create_point_cloud(points_3d)
     save_point_cloud(point_cloud, 'point_cloud.ply')
 

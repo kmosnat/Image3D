@@ -16,16 +16,16 @@ def preprocess_image(image):
     # Compute new dimensions while preserving aspect ratio
 
     # Compute new dimensions while preserving aspect ratio
-    height, width = image.shape[:2]
-    aspect_ratio = width / height
-    new_width = int(800)
-    new_height = int(new_width / aspect_ratio)
+    #height, width = image.shape[:2]
+    #aspect_ratio = width / height
+    #new_width = int(800)
+    #new_height = int(new_width / aspect_ratio)
 
-    resized_image = cv2.resize(image, (new_width, new_height))
-    gray_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2GRAY)
+    #resized_image = cv2.resize(image, (new_width, new_height))
+    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
     # Optionally apply histogram equalization
-    #gray_image = cv2.equalizeHist(gray_image)
+    gray_image = cv2.equalizeHist(gray_image)
 
     return gray_image
 

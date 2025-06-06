@@ -34,7 +34,7 @@ def load_intrinsic_parameters(filename):
     return intrinsic_matrices, dist_coeffs
 
 
-def triangulate_points(matches, camera_params, intrinsic_matrix, dist_coeffs):
+def triangulate_points(matches, intrinsic_matrix, dist_coeffs):
     print(intrinsic_matrix)
     print(dist_coeffs)
 
@@ -64,10 +64,6 @@ def triangulate_points(matches, camera_params, intrinsic_matrix, dist_coeffs):
     for (img1, img2), match_pts in matches.items():
         print(f"Processing pair: {img1} and {img2}")
 
-        if img1 not in camera_params or img2 not in camera_params:
-            print(f"Camera parameters for {img1} or {img2} are missing. Skipping.")
-            continue
-
         # Utiliser les images undistortées
         img1_undist = undistorted_images.get(img1, None)
         img2_undist = undistorted_images.get(img2, None)
@@ -91,9 +87,27 @@ def triangulate_points(matches, camera_params, intrinsic_matrix, dist_coeffs):
         if E.shape[0] > 3:
             E = E[:3, :3]
 
-        _, R_rel, t_rel, mask_pose = cv2.recoverPose(E, pts1_undist, pts2_undist, np.eye(3))
+        # Utiliser la décomposition de la matrice essentielle sans recoverPose
+        # On extrait R, t à partir de E manuellement
+        def decompose_essential_matrix(E):
+            U, S, Vt = np.linalg.svd(E)
+            if np.linalg.det(U) < 0:
+                U *= -1
+            if np.linalg.det(Vt) < 0:
+                Vt *= -1
+            W = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]])
+            R1 = U @ W @ Vt
+            R2 = U @ W.T @ Vt
+            t = U[:, 2]
+            return R1, R2, t
 
-        inliers = mask_pose.ravel() > 0
+        R1_cand, R2_cand, t_cand = decompose_essential_matrix(E)
+        # Choix d'une solution (ici, on prend R1 et t, mais on pourrait tester les 4 possibilités)
+        R_rel = R1_cand
+        t_rel = t_cand.reshape(3, 1)
+        # Optionnel : tester la validité de la solution (cheirality check)
+        # Ici, on considère tous les points comme inliers (pas de mask_pose)
+        inliers = np.ones(len(pts1_undist), dtype=bool)
         #pts1_undist = pts1_undist[inliers]
         #pts2_undist = pts2_undist[inliers]
 
@@ -115,7 +129,7 @@ def triangulate_points(matches, camera_params, intrinsic_matrix, dist_coeffs):
         pts_4d_hom = cv2.triangulatePoints(P1, P2, pts1_undist.T, pts2_undist.T)
         pts_3d = pts_4d_hom[:3] / pts_4d_hom[3]
         pts_3d[2] *= -1  # Inverser l'axe Z pour correspondre à la convention de la caméra
-        
+
         all_points_3d.append(pts_3d.T)
 
         plot_3d_points(pts_3d.T, title=f"Nuage 3D pour la paire {img1} - {img2}")
@@ -133,6 +147,148 @@ def triangulate_points(matches, camera_params, intrinsic_matrix, dist_coeffs):
     plot_camera_orientations(global_poses)
 
     return valid_points
+
+def triangulate_multiview(
+    matches: dict,
+    intrinsic_matrix: np.ndarray,
+    dist_coeffs: np.ndarray
+):
+    """
+    Entrées :
+      • pts_per_image : dictionnaire { image_name: array shape (28,2) }
+          -> chaque array contient les 28 points (u,v) dans le même ordre sur chaque image.
+      • intrinsic_matrix : matrice 3×3 de calibration K
+      • dist_coeffs : vecteur/distorsion (k1,k2,p1,p2,[k3,…])
+
+    Sorties :
+      • points_3d : array (28,3) contenant les coordonnées 3D finales (repère image de référence)
+      • global_poses : dictionnaire { image_name: (R, t) } avec R (3×3) et t (3×1)
+    """
+    pts_per_image = extract_points_per_image_from_matches(matches)
+    # ————————————— 1. Préparation des données —————————————
+    # 1.1. Vérifier qu’on a bien 5 images et que chacune a 28 points
+    images = list(pts_per_image.keys())
+    if len(images) < 2:
+        raise ValueError("Il faut au moins deux images pour faire la triangulation.")
+    for img in images:
+        arr = pts_per_image[img]
+        if arr.shape != (28, 2):
+            raise ValueError(f"L'image '{img}' n'a pas un array shape (28,2).")
+
+    # 1.2. Choisir la première image comme référence
+    img0 = images[0]
+    pts0 = pts_per_image[img0]  # shape (28,2)
+
+    # 1.3. Undistort un seul coup tous les points 2D pour chaque image
+    undist_pts = {}
+    for img in images:
+        pts = pts_per_image[img].astype(np.float64)  # (28,2)
+        # undistortPoints attend shape (N,1,2) et renvoie (N,1,2)
+        # mais si on fournit P=K, on récupère directement en pixels corrigés.
+        und = cv2.undistortPoints(
+            pts.reshape(-1,1,2),
+            intrinsic_matrix,
+            dist_coeffs,
+            P=intrinsic_matrix
+        ).reshape(-1, 2)  # (28,2)
+        undist_pts[img] = und
+        # Visualisation du champ de distorsion pour chaque image
+        # (affiche les flèches de correction)
+        img_path = None
+        for root, dirs, files in os.walk('preprocessed_images'):
+            if img in files:
+                img_path = os.path.join(root, img)
+                break
+        if img_path is not None:
+            image = cv2.imread(img_path)
+            if image is not None:
+                visualize_distortion_field(img, image, pts, intrinsic_matrix, dist_coeffs)
+
+    # ————————————— 2. Estimation des poses globales —————————————
+    global_poses = {}
+    # 2.1. Image de référence : R0 = I, t0 = 0
+    R0 = np.eye(3, dtype=np.float64)
+    t0 = np.zeros((3,1), dtype=np.float64)
+    global_poses[img0] = (R0, t0)
+
+    # 2.2. Pour chaque autre image : calculer E puis (R_i, t_i) via recoverPose
+    for img in images[1:]:
+        # points non-distordus de l’image 0 et image i
+        pts0_ud = undist_pts[img0]  # (28,2)
+        ptsi_ud = undist_pts[img]   # (28,2)
+
+        # findEssentialMat peut prendre pts normalisés (après undistortPoints + P=K)
+        # Ici, on fournit K uniquement pour le calcul de RANSAC interne.
+        E, mask_E = cv2.findEssentialMat(
+            pts0_ud,
+            ptsi_ud,
+            intrinsic_matrix,
+            method=cv2.RANSAC,
+            prob=0.999,
+            threshold=1.0
+        )
+        if E is None or E.shape[0] < 3:
+            raise RuntimeError(f"Impossible de calculer l'E pour {img0}–{img}.")
+
+        # RecoverPose renvoie R, t à l’échelle arbitraire (t unitaire)
+        _, R_i, t_i, mask_pose = cv2.recoverPose(
+            E,
+            pts0_ud,
+            ptsi_ud,
+            intrinsic_matrix
+        )
+
+        # Stocker la pose (R_i, t_i) telle quelle.
+        global_poses[img] = (R_i, t_i)
+        # Visualisation de la pose relative
+        decompose_pose(R_i, t_i, seq='xyz', degrees=True)
+
+    # ————————————— 3. Construction des matrices de projection P_i = K [R_i | t_i] —————————————
+    Projections = {}
+    for img in images:
+        R_i, t_i = global_poses[img]
+        RT_i = np.hstack((R_i, t_i))          # shape (3,4)
+        P_i = intrinsic_matrix.dot(RT_i)      # shape (3,4)
+        Projections[img] = P_i
+
+    # ————————————— 4. Triangulation multi‐vues (5 images, 28 points) —————————————
+    points_3d = np.zeros((28,3), dtype=np.float64)
+
+    for j in range(28):
+        # Pour le point j, construire A_j en empilant 2 lignes pour chaque image
+        A_j = []
+
+        for img in images:
+            # on récupère le point non-distordu en pixels (x_ui, y_ui)
+            x_ui, y_ui = undist_pts[img][j]  # déjà corrigé
+            P_i = Projections[img]           # shape (3,4)
+            p1 = P_i[0,:]  # première ligne de P_i  (1×4)
+            p2 = P_i[1,:]  # deuxième ligne       (1×4)
+            p3 = P_i[2,:]  # troisième ligne      (1×4)
+
+            # 2 équations : x_ui * (p3 X) − (p1 X) = 0 ;  y_ui * (p3 X) − (p2 X) = 0
+            row1 = x_ui * p3 - p1
+            row2 = y_ui * p3 - p2
+            A_j.append(row1)
+            A_j.append(row2)
+
+        A_j = np.vstack(A_j)  # shape (2×5, 4) = (10,4)
+
+        # SVD pour résoudre A_j X = 0
+        _, _, Vt = np.linalg.svd(A_j)
+        Xj_homog = Vt[-1]           # vecteur associé à la plus petite valeur singulière
+        Xj_homog /= Xj_homog[3]     # normalisation homogène
+
+        points_3d[j, :] = Xj_homog[:3]
+
+    # ————————————— 5. Visualisation —————————————
+    plot_3d_points(points_3d, title="Nuage de points 3D multi-vues")
+    plot_depth_histogram(points_3d)
+    plot_camera_trajectory(global_poses)
+    plot_camera_orientations(global_poses)
+
+    # ————————————— 6. On retourne le nuage 3D et les poses —————————————
+    return points_3d
 
 
 def create_point_cloud(points):
@@ -297,11 +453,17 @@ def plot_3d_points(points_3d, title="Nuage de points 3D"):
     ax = fig.add_subplot(111, projection='3d')
     ax.scatter(points_3d[:, 0], points_3d[:, 1], points_3d[:, 2], s=15)
     # Tracer les lignes entre chaque point et le suivant, et fermer la boucle
+    links = [(14, 3),(3, 0), (0, 7), (13, 2), (2, 1), (1, 8), (2, 11), (5, 0), (1, 10), (5, 4), (4, 15), (6, 23), (5, 24), (24, 27), (27, 30), (4, 25), (26, 19), (16, 25), (17, 26), (27, 22)]  
     if len(points_3d) > 1:
         for i in range(len(points_3d)-1):
             p1 = points_3d[i]
             p2 = points_3d[(i + 1) % len(points_3d)]  # le suivant, ou le premier si dernier
             ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]], color='orange', linewidth=1)
+        for i, j in links:
+            if i < len(points_3d) and j < len(points_3d):
+                p1 = points_3d[i]
+                p2 = points_3d[j]
+                ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]], color='orange', linewidth=1)
     # Afficher le numéro de chaque point
     for i, (x, y, z) in enumerate(points_3d):
         ax.text(x, y, z, str(i), color='black', fontsize=9, ha='left', va='bottom')
@@ -470,3 +632,31 @@ def project_and_show_on_image(image_name, points_3d, intrinsic, R, t, original_2
     ax.legend()
     plt.show(block=False)
     plt.pause(0.001)
+
+def extract_points_per_image_from_matches(matches):
+    """
+    Convertit un dictionnaire de matches par paires (clé=(img1,img2), valeurs=[[x1,y1,x2,y2,...],...])
+    en un dictionnaire {image: np.array(N,2)} où chaque image a la liste ordonnée de ses points.
+    Suppose que les points sont dans le même ordre pour chaque paire.
+    """
+    # Collecte tous les noms d'images uniques
+    images = set()
+    for (img1, img2) in matches.keys():
+        images.add(img1)
+        images.add(img2)
+    images = sorted(images)
+    # Pour chaque image, on collecte les points dans l'ordre des paires
+    points_per_image = {img: [] for img in images}
+    # On suppose que pour chaque paire, les points sont dans le même ordre
+    isFirst = True
+    for (img1, img2), match_pts in matches.items():
+        for pt in match_pts:
+            x1, y1, x2, y2 = pt[0], pt[1], pt[2], pt[3]
+            if isFirst:
+                points_per_image[img1].append([x1, y1])
+            points_per_image[img2].append([x2, y2])
+        isFirst = False
+    # Conversion en array
+    for img in points_per_image:
+        points_per_image[img] = np.array(points_per_image[img], dtype=np.float64)
+    return points_per_image

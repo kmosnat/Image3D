@@ -143,7 +143,7 @@ def launch_selector(images, matching_output_path, num_points=6):
     Ajoute la visualisation des correspondances (drawMatches, draw_title, sauvegarde) pour chaque paire.
     """
     selected_points = {}
-    nb_max_img  = 2
+    nb_max_img  = 5
     for filename, img in images:
         if img is None:
             print(f"Impossible de lire {filename}")
