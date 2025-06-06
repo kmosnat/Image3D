@@ -9,14 +9,7 @@ import csv
 import matplotlib.pyplot as plt
 import numpy as np
 
-# Initialize SIFT with custom parameters
-nfeatures = 5000  # Increase for more features
-contrastThreshold = 0.1  # Decrease to retain more features with lower contrast
-edgeThreshold = 100  # Decrease to retain more features that are edge-like
-sigma = 1.6  # Typically left at default
-
-sift = cv2.SIFT_create(nfeatures=nfeatures, nOctaveLayers = 6, contrastThreshold=contrastThreshold,
-                       edgeThreshold=edgeThreshold, sigma=sigma)
+sift = cv2.SIFT_create()
 
 def draw_title(img, title, font_scale=1, font=cv2.FONT_HERSHEY_SIMPLEX, y_offset=30):
     # Adds a title to an image at a specified position.
@@ -53,7 +46,7 @@ def detect_and_match_features(image1, image2, sift, pair_name, save_path):
 
     # FLANN-based matcher parameters
     FLANN_INDEX_KDTREE = 1  # KD-Tree algorithm
-    index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=9)
+    index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
     search_params = dict(checks=150)
 
     # Matching descriptor vectors using FLANN matcher
@@ -72,7 +65,7 @@ def detect_and_match_features(image1, image2, sift, pair_name, save_path):
     # Store all good matches as per Lowe's ratio test.
     good_matches = []
     for m, n in matches:
-        if m.distance < 0.7 * n.distance:
+        if m.distance < 0.75 * n.distance:
             good_matches.append(m)
 
     print(f"{len(good_matches)} matches passed Lowe's ratio test.")
@@ -85,7 +78,7 @@ def detect_and_match_features(image1, image2, sift, pair_name, save_path):
             [keypoints2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
 
         matrix, mask = cv2.findHomography(
-            ptsA, ptsB, cv2.RANSAC, 10.0)
+            ptsA, ptsB, cv2.RANSAC, 2.0)
         if mask is not None:
             matchesMask = mask.ravel().tolist()
             good_matches = [gm for gm, mask in zip(
@@ -100,15 +93,10 @@ def detect_and_match_features(image1, image2, sift, pair_name, save_path):
 
     # Draw top matches
     img_matches = cv2.drawMatches(image1, keypoints1, image2, keypoints2,
-                                  good_matches[:1000], None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+                                  good_matches, None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
 
     # Adding title to the image
     draw_title(img_matches, 'Feature Matches')
-
-    # Resize image if necessary (similar to adjusting figure size)
-    desired_width = 1200  # Example width, adjust as needed
-    scale_ratio = desired_width / img_matches.shape[1]
-    img_matches = cv2.resize(img_matches, None, fx=scale_ratio, fy=scale_ratio)
 
     # Save the image
     if not os.path.exists(save_path):

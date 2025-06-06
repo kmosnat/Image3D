@@ -1,8 +1,3 @@
-# reconstruction_visualization.py
-# Shi Zhang
-# This file is for 3D scene reconstruction and visualization
-
-# import statements
 import cv2
 import os
 import csv
@@ -15,17 +10,13 @@ from scipy.spatial.transform import Rotation as R
 
 
 def load_intrinsic_parameters(filename):
-    # Loads intrinsic camera parameters from a CSV file.
-    # These parameters include the camera matrix and distortion coefficients for each image.
-
     intrinsic_matrices = {}
     dist_coeffs = {}
     with open(filename, 'r') as file:
         reader = csv.reader(file)
-        next(reader)  # Skip the header
+        next(reader)
         for row in reader:
             image, intrinsic_flat, dist_flat = row
-            # Convert string representations back to numpy arrays
             intrinsic_matrix = np.fromstring(
                 intrinsic_flat.strip("[]"), sep=', ').reshape(3, 3)
             dist_coeff = np.fromstring(dist_flat.strip("[]"), sep=', ')
@@ -40,10 +31,8 @@ def triangulate_points(matches, camera_params, intrinsic_matrix, dist_coeffs):
 
     all_points_3d = []
     global_poses = {}
-    global_poses[None] = (np.eye(3), np.zeros((3, 1)))
-    prev_img = None
-
-    # Charger et undistort toutes les images une fois pour toutes
+    first_img = None
+    
     undistorted_images = {}
     for img_name in set([k[0] for k in matches.keys()] + [k[1] for k in matches.keys()]):
         img_path = None
@@ -61,6 +50,8 @@ def triangulate_points(matches, camera_params, intrinsic_matrix, dist_coeffs):
         else:
             print(f"[Info] Image {img_name} non trouvée dans preprocessed_images/.")
 
+    processed_images = set()
+    
     for (img1, img2), match_pts in matches.items():
         print(f"Processing pair: {img1} and {img2}")
 
@@ -68,22 +59,51 @@ def triangulate_points(matches, camera_params, intrinsic_matrix, dist_coeffs):
             print(f"Camera parameters for {img1} or {img2} are missing. Skipping.")
             continue
 
-        # Utiliser les images undistortées
+        if img1 in processed_images and img2 in processed_images:
+            continue
+
         img1_undist = undistorted_images.get(img1, None)
         img2_undist = undistorted_images.get(img2, None)
-        # ...existing code...
+        
+        if img1_undist is None or img2_undist is None:
+            print(f"Could not load undistorted images for {img1} or {img2}")
+            continue
+
         pts1 = np.float32([pt[0:2] for pt in match_pts])
         pts2 = np.float32([pt[2:4] for pt in match_pts])
-        # Les points sont déjà dans le repère image corrigé
+        
+        # Normalisation des coordonnées pour améliorer la stabilité numérique
+        h1, w1 = img1_undist.shape[:2]
+        h2, w2 = img2_undist.shape[:2]
+        
+        # Normalisation : centre à (0,0) et échelle [-1,1]
+        pts1_norm = np.copy(pts1)
+        pts1_norm[:, 0] = (pts1[:, 0] - w1/2) / (w1/2)
+        pts1_norm[:, 1] = (pts1[:, 1] - h1/2) / (h1/2)
+        
+        pts2_norm = np.copy(pts2)
+        pts2_norm[:, 0] = (pts2[:, 0] - w2/2) / (w2/2)
+        pts2_norm[:, 1] = (pts2[:, 1] - h2/2) / (h2/2)
+        
+        # Matrice intrinsèque normalisée
+        K_norm = np.array([[2.0/w1, 0, 0],
+                          [0, 2.0/h1, 0],
+                          [0, 0, 1]])
+        
         pts1_undist = cv2.undistortPoints(
             np.expand_dims(pts1, axis=1), intrinsic_matrix, dist_coeffs, P=intrinsic_matrix).squeeze()
         pts2_undist = cv2.undistortPoints(
             np.expand_dims(pts2, axis=1), intrinsic_matrix, dist_coeffs, P=intrinsic_matrix).squeeze()
-        visualize_distortion_field(img1, img1_undist, pts1, intrinsic_matrix, dist_coeffs)
-        visualize_distortion_field(img2, img2_undist, pts2, intrinsic_matrix, dist_coeffs)
+        
+        if pts1_undist.ndim == 1:
+            pts1_undist = pts1_undist.reshape(1, -1)
+        if pts2_undist.ndim == 1:
+            pts2_undist = pts2_undist.reshape(1, -1)
 
-        E, mask = cv2.findEssentialMat(
-            pts1_undist, pts2_undist, np.eye(3), method=cv2.RANSAC, prob=0.999, threshold=1.0)
+        # Utiliser les points normalisés pour la matrice essentielle
+        E, mask_E = cv2.findEssentialMat(
+            pts1_norm, pts2_norm, K_norm, 
+            method=cv2.RANSAC, prob=0.999, threshold=0.01)  # Seuil réduit pour points normalisés
 
         if E is None or E.shape[0] < 3 or E.shape[1] != 3:
             print(f"Invalid essential matrix for pair {img1}-{img2}, skipping.")
@@ -91,48 +111,119 @@ def triangulate_points(matches, camera_params, intrinsic_matrix, dist_coeffs):
         if E.shape[0] > 3:
             E = E[:3, :3]
 
-        _, R_rel, t_rel, mask_pose = cv2.recoverPose(E, pts1_undist, pts2_undist, np.eye(3))
+        _, R_rel, t_rel, mask_pose = cv2.recoverPose(E, pts1_norm, pts2_norm, K_norm)
 
-        inliers = mask_pose.ravel() > 0
-        #pts1_undist = pts1_undist[inliers]
-        #pts2_undist = pts2_undist[inliers]
+        # Combine masks to get good inliers
+        if mask_E.shape[0] != mask_pose.shape[0]:
+            print(f"Mask size mismatch for {img1}-{img2}, using pose mask only")
+            good_matches = mask_pose.ravel() > 0
+        else:
+            good_matches = (mask_E.ravel() > 0) & (mask_pose.ravel() > 0)
+        
+        # Filter points to inliers only
+        pts1_inliers = pts1_undist[good_matches]
+        pts2_inliers = pts2_undist[good_matches]
+        
+        print(f"Good matches: {np.sum(good_matches)} out of {len(pts1_undist)}")
+        
+        if np.sum(good_matches) < 8:
+            print(f"Too few good matches ({np.sum(good_matches)}) for {img1}-{img2}")
+            continue
 
-        if img1 not in global_poses:
-            if prev_img is None:
-                global_poses[img1] = (np.eye(3), np.zeros((3, 1)))
-            else:
-                global_poses[img1] = global_poses[prev_img]
+        if first_img is None:
+            first_img = img1
+            global_poses[img1] = (np.eye(3), np.zeros((3, 1)))
+            
+        if img1 in global_poses:
+            R1, t1 = global_poses[img1]
+            R2 = R1 @ R_rel
+            t2 = R1 @ t_rel + t1
+            global_poses[img2] = (R2, t2)
+        elif img2 in global_poses:
+            R2, t2 = global_poses[img2]
+            R1 = R2 @ R_rel.T
+            t1 = R2 @ (-R_rel.T @ t_rel) + t2
+            global_poses[img1] = (R1, t1)
+        else:
+            global_poses[img1] = (np.eye(3), np.zeros((3, 1)))
+            R1, t1 = global_poses[img1]
+            R2 = R1 @ R_rel
+            t2 = R1 @ t_rel + t1
+            global_poses[img2] = (R2, t2)
 
         R1, t1 = global_poses[img1]
-        R2 = R1 @ R_rel
-        t2 = R1 @ t_rel + t1
-        global_poses[img2] = (R2, t2)
+        R2, t2 = global_poses[img2]
 
-        decompose_pose(R_rel, t_rel, seq='xyz', degrees=True)
-
-        P1 = np.hstack((R1, t1))
-        P2 = np.hstack((R2, t2))
-        pts_4d_hom = cv2.triangulatePoints(P1, P2, pts1_undist.T, pts2_undist.T)
-        pts_3d = pts_4d_hom[:3] / pts_4d_hom[3]
-        pts_3d[2] *= -1  # Inverser l'axe Z pour correspondre à la convention de la caméra
+        P1 = intrinsic_matrix @ np.hstack((R1, t1))
+        P2 = intrinsic_matrix @ np.hstack((R2, t2))
         
-        all_points_3d.append(pts_3d.T)
+        pts_4d_hom = cv2.triangulatePoints(P1, P2, pts1_inliers.T, pts2_inliers.T)
+        pts_3d = pts_4d_hom[:3] / (pts_4d_hom[3] + 1e-8)
+        pts_3d = pts_3d.T
+        
+        # Filtrage amélioré avec seuils adaptatifs
+        # Calculer la distance médiane pour adapter les seuils
+        distances = np.linalg.norm(pts_3d, axis=1)
+        median_dist = np.median(distances)
+        
+        # Filtres adaptatifs basés sur la distribution des points
+        valid_depth = (pts_3d[:, 2] > 0.1) & (pts_3d[:, 2] < median_dist * 5)
+        valid_distance = distances < median_dist * 3
+        
+        # Filtrer les outliers statistiques
+        z_scores = np.abs((distances - np.mean(distances)) / (np.std(distances) + 1e-8))
+        valid_stats = z_scores < 2.0  # Seuil à 2 sigma
+        
+        valid_mask = valid_depth & valid_distance & valid_stats
+        
+        pts_3d_valid = pts_3d[valid_mask]
+        
+        if len(pts_3d_valid) > 0:
+            all_points_3d.append(pts_3d_valid)
+            print(f"Added {len(pts_3d_valid)} valid 3D points from pair {img1}-{img2}")
+            print(f"Distance range: {np.min(distances[valid_mask]):.3f} - {np.max(distances[valid_mask]):.3f}")
+            plot_3d_points(pts_3d_valid, title=f"Nuage 3D pour la paire {img1} - {img2}")
+        else:
+            print(f"No valid 3D points for pair {img1}-{img2}")
 
-        plot_3d_points(pts_3d.T, title=f"Nuage 3D pour la paire {img1} - {img2}")
-        #project_and_show_on_image(img1, pts_3d.T, intrinsic_matrix, R1, t1, pts1_undist)
+        processed_images.add(img1)
+        processed_images.add(img2)
 
-        prev_img = img2
-
-    points_3d = np.concatenate(all_points_3d, axis=0) if all_points_3d else np.empty((0, 3))
-    valid_points = points_3d[~np.isnan(points_3d).any(axis=1) & ~np.isinf(points_3d).any(axis=1)]
-    print(f"Total valid 3D points: {len(valid_points)}")
-
-    plot_3d_points(valid_points, title="Nuage de points 3D global")
-    plot_depth_histogram(valid_points)
-    plot_camera_trajectory(global_poses)
-    plot_camera_orientations(global_poses)
-
-    return valid_points
+    # Combine all points with bundle adjustment-like normalization
+    if all_points_3d:
+        points_3d = np.concatenate(all_points_3d, axis=0)
+        
+        # Normalisation globale pour corriger les problèmes d'échelle
+        centroid = np.mean(points_3d, axis=0)
+        points_3d_centered = points_3d - centroid
+        
+        # Normalisation par l'écart-type pour chaque axe
+        std_devs = np.std(points_3d_centered, axis=0)
+        std_devs[std_devs < 1e-8] = 1.0  # Éviter la division par zéro
+        
+        # Appliquer une normalisation adaptative
+        scale_factor = np.median(std_devs)
+        points_3d_normalized = points_3d_centered / scale_factor
+        
+        # Additional filtering
+        finite_mask = np.isfinite(points_3d_normalized).all(axis=1)
+        points_3d_final = points_3d_normalized[finite_mask]
+        
+        print(f"Total valid 3D points after normalization: {len(points_3d_final)}")
+        print(f"Point cloud bounds: X[{np.min(points_3d_final[:,0]):.3f}, {np.max(points_3d_final[:,0]):.3f}], "
+              f"Y[{np.min(points_3d_final[:,1]):.3f}, {np.max(points_3d_final[:,1]):.3f}], "
+              f"Z[{np.min(points_3d_final[:,2]):.3f}, {np.max(points_3d_final[:,2]):.3f}]")
+        
+        if len(points_3d_final) > 0:
+            plot_3d_points(points_3d_final, title="Nuage de points 3D global normalisé")
+            plot_depth_histogram(points_3d_final)
+            plot_camera_trajectory(global_poses)
+            plot_camera_orientations(global_poses)
+        
+        return points_3d_final
+    else:
+        print("No valid 3D points reconstructed")
+        return np.empty((0, 3))
 
 
 def create_point_cloud(points):
@@ -152,6 +243,10 @@ def visualize_point_cloud(point_cloud):
     # Visualizes a point cloud using Open3D's visualization capabilities.
     # This function allows for the inspection and analysis of the reconstructed 3D scene.
 
+    if point_cloud.is_empty():
+        print("Point cloud is empty, cannot visualize.")
+        return
+        
     # Remove outliers
     point_cloud, ind = point_cloud.remove_statistical_outlier(
         nb_neighbors=20, std_ratio=2.0)
@@ -159,14 +254,6 @@ def visualize_point_cloud(point_cloud):
     print("Attempting to visualize point cloud...")
     o3d.visualization.draw_geometries([point_cloud])
 
-def create_point_cloud(points):
-    point_cloud = o3d.geometry.PointCloud()
-    if points.size > 0:
-        point_cloud.points = o3d.utility.Vector3dVector(points)
-        print("Creating point cloud with points:", points.shape)
-    else:
-        print("No points available to create point cloud.")
-    return point_cloud
 
 def save_point_cloud(point_cloud, filename):
     """
@@ -178,67 +265,59 @@ def save_point_cloud(point_cloud, filename):
     else:
         print("Failed to export point cloud.")
 
-def reconstruct_mesh(
-    point_cloud: o3d.geometry.PointCloud,
-    *,
-    nb_neighbors: int = 20,
-    std_ratio: float = 2.0,
-    voxel_size: float | None = None,
-    normal_radius: float = 0.1,
-    normal_max_nn: int = 30,
-    poisson_depth: int = 10,
-    poisson_scale: float = 1.1,
-    poisson_linear_fit: bool = False,
-    density_prune_ratio: float | None = 0.01,
-    target_triangle_count: int | None = None,
-    laplacian_iterations: int = 5,
-):
-    
-    pc = point_cloud
 
-    # 1. Voxel down-sampling pour uniformiser la densité et accélérer la suite
-    if voxel_size:
-        pc = pc.voxel_down_sample(voxel_size)
+def reconstruct_mesh(point_cloud):
+    # 1) Si on reçoit un Open3D PointCloud, on en extrait simplement les points
+    if isinstance(point_cloud, o3d.geometry.PointCloud):
+        pts_array = np.asarray(point_cloud.points)
+    else:
+        # Sinon on suppose que c'est déjà un np.ndarray de forme (N, 3)
+        pts_array = np.asarray(point_cloud, dtype=np.float64)
+        if pts_array.ndim != 2 or pts_array.shape[1] != 3:
+            raise ValueError("point_cloud doit être un tableau de forme (N, 3) ou un Open3D PointCloud")
 
-    # 2. Filtrage statistique des outliers
-    pc, ind = pc.remove_statistical_outlier(nb_neighbors=nb_neighbors, std_ratio=std_ratio)
-    pc = pc.select_by_index(ind)
+    # 2) Créer un nouveau PointCloud et lui assigner les points
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(pts_array)
 
-    # 3. Estimation & orientation cohérente des normales
-    pc.estimate_normals(
-        search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=normal_radius, max_nn=normal_max_nn)
-    )
-    pc.orient_normals_consistent_tangent_plane(50)
-
-    # 4. Reconstruction Poisson
-    mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
-        pc,
-        depth=poisson_depth,
-        scale=poisson_scale,
-        linear_fit=poisson_linear_fit,
+    # 3) Estimer les normales (voisinage restreint, puisque nuage dense)
+    pcd.estimate_normals(
+        search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.03, max_nn=30)
     )
 
-    # 5. Suppression des triangles de faible densité
-    if density_prune_ratio is not None:
-        dens = np.asarray(densities)
-        thresh = np.quantile(dens, density_prune_ratio)
-        mesh.remove_vertices_by_mask(dens < thresh)
+    # 4) Forcer l'orientation des normales vers l'extérieur (utile pour une sphère centrée en (0,0,0))
+    pts = np.asarray(pcd.points)
+    normals = pts / np.linalg.norm(pts, axis=1, keepdims=True)
+    pcd.normals = o3d.utility.Vector3dVector(normals)
 
-    # 6. Décimation pour contrôler la taille du maillage
-    if target_triangle_count is not None and target_triangle_count < len(mesh.triangles):
-        mesh = mesh.simplify_quadric_decimation(target_triangle_count)
+    # 5) Calculer les rayons pour la BPA à partir de la distance moyenne aux voisins
+    distances = pcd.compute_nearest_neighbor_distance()
+    avg_dist  = float(np.mean(distances))
+    # Par exemple, on génère 5 rayons entre 1.0× et 2.0× l'espacement moyen
+    radii = o3d.utility.DoubleVector([avg_dist * f for f in np.linspace(1.0, 2.0, 5)])
 
-    # 7. Lissage léger pour réduire les artefacts
-    if laplacian_iterations > 0:
-        mesh = mesh.filter_smooth_laplacian(number_of_iterations=laplacian_iterations)
+    # 6) Reconstruction par Ball Pivoting
+    mesh_bpa = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(pcd, radii)
 
-    # 8. Nettoyage topologique final
-    mesh.remove_degenerate_triangles()
-    mesh.remove_duplicated_triangles()
-    mesh.remove_duplicated_vertices()
-    mesh.remove_non_manifold_edges()
+    # 7) Exporter le maillage en OBJ
+    chemin_obj = "reconstruct.obj"
+    o3d.io.write_triangle_mesh(chemin_obj, mesh_bpa)
 
-    return mesh
+    # 8) Relire l'OBJ pour s'assurer que tout est correct
+    mesh_chargé = o3d.io.read_triangle_mesh(chemin_obj)
+    print(f"OBJ rechargé : {len(mesh_chargé.vertices)} sommets, {len(mesh_chargé.triangles)} faces")
+
+    # 9) Ajouter les normales si elles manquent (nécessaire pour l'affichage)
+    if not mesh_chargé.has_vertex_normals():
+        mesh_chargé.compute_vertex_normals()
+
+    # 10) Visualiser la sphère OBJ réimportée
+    o3d.visualization.draw_geometries(
+        [mesh_chargé],
+        window_name="Reconstruction par BPA"
+    )
+
+    return mesh_bpa
 
 
 def export_mesh(mesh, filename):  # [AJOUT]
@@ -248,6 +327,7 @@ def export_mesh(mesh, filename):  # [AJOUT]
         print(f"Mesh exported successfully to {filename}")
     else:
         print("Failed to export mesh.")
+
 
 def visualize_distortion_field(image_name, image, pts, intrinsic, dist):
     """
@@ -273,6 +353,7 @@ def visualize_distortion_field(image_name, image, pts, intrinsic, dist):
     plt.show(block=False)
     plt.pause(0.001)
 
+
 def decompose_pose(R_mat, t_vec, seq='xyz', degrees=True):
     """
     Décompose une pose (matrice de rotation + translation) en angles d'Euler et translation.
@@ -287,6 +368,7 @@ def decompose_pose(R_mat, t_vec, seq='xyz', degrees=True):
     t = t_vec.flatten()
     print(f"Rotation (x, y, z): {angles}, Translation: {t}")
     return angles, t
+
 
 def plot_3d_points(points_3d, title="Nuage de points 3D"):
     """
@@ -312,6 +394,7 @@ def plot_3d_points(points_3d, title="Nuage de points 3D"):
     plt.show(block=False)
     plt.pause(0.001)
 
+
 def plot_depth_histogram(points_3d):
     """
     Affiche l'histogramme des profondeurs (z) des points 3D.
@@ -324,6 +407,7 @@ def plot_depth_histogram(points_3d):
     plt.title('Distribution des profondeurs')
     plt.show(block=False)
     plt.pause(0.001)
+
 
 def plot_camera_trajectory(global_poses):
     """
@@ -342,6 +426,7 @@ def plot_camera_trajectory(global_poses):
     ax.set_title('Trajectoire des caméras')
     plt.show(block=False)
     plt.pause(0.001)
+
 
 def plot_camera_orientations(global_poses):
     """
@@ -372,6 +457,7 @@ def plot_camera_orientations(global_poses):
     ax.legend()
     plt.show(block=False)
     plt.pause(0.001)
+
 
 def project_and_show_on_image(image_name, points_3d, intrinsic, R, t, original_2d_points=None):
     """

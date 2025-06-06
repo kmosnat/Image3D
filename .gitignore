@@ -6,3 +6,4 @@ feature_matches.csv
 intrinsic_parameters.csv
 reconstructed_mesh.obj
 utils/
+test.py

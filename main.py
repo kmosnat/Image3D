@@ -44,9 +44,9 @@ def main(batch, visualize=False):
     images = load_images_from_folder(preprocessed_path)
 
     # Appariement de caractéristiques
-    manual_matching = True
+    manual_matching = False
     if manual_matching:
-        matches = launch_selector(images, matching_output_path, 18)
+        matches = launch_selector(images, matching_output_path, 6)
     else:
         matches = process_feature_matching(images, matching_output_path)
     save_matches_to_csv(matches, 'feature_matches.csv')
@@ -56,10 +56,7 @@ def main(batch, visualize=False):
 
     # Estimation des paramètres caméra
     cam_params = estimate_camera_parameters(matches, dimensions, ransac_filter=not manual_matching)
-    if manual_matching:
-        intrinsics, dist_coeffs = calibrate_camera_with_chessboard(images_calib, (10,7), 2)
-    else:
-        intrinsics, dist_coeffs = estimate_intrinsic_parameters(matches, dimensions)
+    intrinsics, dist_coeffs = calibrate_camera_with_chessboard(images_calib, (10,7), 2)
 
     save_camera_params_to_file(cam_params, 'camera_parameters.csv')
     #save_intrinsic_params_to_file(intrinsics, dist_coeffs, 'intrinsic_parameters.csv')
@@ -72,9 +69,7 @@ def main(batch, visualize=False):
     if visualize:
         # Visualisation et export
         visualize_point_cloud(point_cloud)
-        mesh = reconstruct_mesh(point_cloud)
-        export_mesh(mesh, "reconstructed_mesh.obj")
-        o3d.visualization.draw_geometries([mesh], window_name='3D Viewer', width=1920, height=1080)
+        reconstruct_mesh(point_cloud)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Pipeline de reconstruction 3D à partir d’images.')
